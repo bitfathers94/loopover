@@ -19,6 +19,7 @@ Two products, self-host-first:
   naming before hardcoding either name into a new issue body.
 
 **Standing priorities named by the maintainer (2026-07-14), not yet issue-backed:**
+
 - **AMS selfhost hardening, round 2.** Miner Wave 4 ("AMS Hardening & Packaging") fully closed
   (151/151) on 2026-07-14 — that backlog is empty, not hiding more maintainer-only work. Getting more
   requires a fresh gap-audit (read the current `packages/loopover-miner`/`-engine` code against what
@@ -30,22 +31,22 @@ Two products, self-host-first:
   (`packages/loopover-miner/DEPLOYMENT.md` + 10 files under `docs/`) exist only as raw markdown, never
   ported to the real docs website (`apps/loopover-ui/src/routes/docs.*.tsx`) the way ORB's
   self-hosting docs already are — filed as epic #6012 (milestone `ORB - Long Term Features &
-  Improvements`, not its own milestone — see the milestone-discipline note above) with one sub-issue
+Improvements`, not its own milestone — see the milestone-discipline note above) with one sub-issue
   per source file. Check #6012's sub-issue completion state before assuming this work still needs
   scoping from scratch.
 
 ## Milestone taxonomy (as of 2026-07-14 — re-check before trusting, this moves fast)
 
-| Milestone | Nature | Contributor-open? |
-|---|---|---|
-| `Miner Wave N — <theme>` (no suffix) | A finished or active AMS-hardening-style wave | Mostly yes once released |
-| `Miner Wave N — <theme> (maintainer)` | Business/legal/architecture track (currently Wave 5, Rent-a-Loop) | Mostly no — but check individual issues, some concrete implementation sub-tasks are deliberately carved out and unlocked even inside a `(maintainer)`-titled milestone |
-| `Miner Wave 4.5 — AMS Hardening Round 2` | **New, created 2026-07-15.** The home for recurring post-Wave-4 gap-audit findings in `packages/loopover-miner`/`packages/loopover-engine` — correctness bugs, unenforced documented contracts, stale comments, small hardening gaps. Every future "AMS selfhost hardening round N" audit files here, not a fresh milestone each time. | Yes — same shape as Wave 4's own contributor-open issues |
-| `AMS Cloud Readiness (maintainer)` | Hosted **multi-tenant SaaS** AMS — NOT the same thing as "AMS selfhost hardening" despite the name similarity | Mostly no (architecture/billing/SLA decisions) — a handful of pure research-spike/audit/load-test issues are deliberately contributor-eligible; check labels per-issue |
-| `ORB Cloud Readiness (maintainer)` | Same shape, for ORB's hosted SaaS story | Mostly no, same caveat — the first several issues in this milestone (#4878-4884-style, "extract X into gittensory-engine") are often pure refactors miscategorized here, not actually tenant/business-specific — read the body, not just the milestone |
-| `ORB - Long Term Features & Improvements` | Grab-bag: some genuine self-host feature/bug work, some product-design epics awaiting maintainer subjective calls | Mixed — read each body |
-| `LoopOver Rebrand Migration (maintainer)` | Brand/infra cutover | No |
-| Unmilestoned | Should be rare — every gardening-generated issue gets a real milestone (see below) | If you find one, fold it into the closest-fitting existing milestone rather than leave it adrift |
+| Milestone                                 | Nature                                                                                                                                                                                                                                                                                                                                 | Contributor-open?                                                                                                                                                                                                                                      |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Miner Wave N — <theme>` (no suffix)      | A finished or active AMS-hardening-style wave                                                                                                                                                                                                                                                                                          | Mostly yes once released                                                                                                                                                                                                                               |
+| `Miner Wave N — <theme> (maintainer)`     | Business/legal/architecture track (currently Wave 5, Rent-a-Loop)                                                                                                                                                                                                                                                                      | Mostly no — but check individual issues, some concrete implementation sub-tasks are deliberately carved out and unlocked even inside a `(maintainer)`-titled milestone                                                                                 |
+| `Miner Wave 4.5 — AMS Hardening Round 2`  | **New, created 2026-07-15.** The home for recurring post-Wave-4 gap-audit findings in `packages/loopover-miner`/`packages/loopover-engine` — correctness bugs, unenforced documented contracts, stale comments, small hardening gaps. Every future "AMS selfhost hardening round N" audit files here, not a fresh milestone each time. | Yes — same shape as Wave 4's own contributor-open issues                                                                                                                                                                                               |
+| `AMS Cloud Readiness (maintainer)`        | Hosted **multi-tenant SaaS** AMS — NOT the same thing as "AMS selfhost hardening" despite the name similarity                                                                                                                                                                                                                          | Mostly no (architecture/billing/SLA decisions) — a handful of pure research-spike/audit/load-test issues are deliberately contributor-eligible; check labels per-issue                                                                                 |
+| `ORB Cloud Readiness (maintainer)`        | Same shape, for ORB's hosted SaaS story                                                                                                                                                                                                                                                                                                | Mostly no, same caveat — the first several issues in this milestone (#4878-4884-style, "extract X into gittensory-engine") are often pure refactors miscategorized here, not actually tenant/business-specific — read the body, not just the milestone |
+| `ORB - Long Term Features & Improvements` | Grab-bag: some genuine self-host feature/bug work, some product-design epics awaiting maintainer subjective calls                                                                                                                                                                                                                      | Mixed — read each body                                                                                                                                                                                                                                 |
+| `LoopOver Rebrand Migration (maintainer)` | Brand/infra cutover                                                                                                                                                                                                                                                                                                                    | No                                                                                                                                                                                                                                                     |
+| Unmilestoned                              | Should be rare — every gardening-generated issue gets a real milestone (see below)                                                                                                                                                                                                                                                     | If you find one, fold it into the closest-fitting existing milestone rather than leave it adrift                                                                                                                                                       |
 
 **Every gardening-generated issue gets a milestone — none ship unmilestoned.** Default to the
 closest-fitting existing one. Creating a new milestone is a much higher bar than it sounds — confirmed
@@ -65,6 +66,7 @@ confirmation, per the maintainer's own stated preference (2026-07-15): "figure i
 ## What's safe to unleash — the actual test
 
 A concrete engineering task is safe to hand to a contributor when:
+
 - It has a clear existing precedent to follow in the codebase (another file/module/pattern already
   does the analogous thing), so "how" isn't itself an open design question.
 - It doesn't require a business/product decision (pricing, ToS, what to charge, whether to build a
@@ -95,7 +97,7 @@ is.
 
 **What this broke once already:** issue #5996 (a combined ORB+AMS self-host doc) explained in
 Context that public-facing docs live on the website, not as repo markdown, and had one Requirements
-bullet saying so. A contributor's PR (#6011, filed *after* that bullet was added) still added a new
+bullet saying so. A contributor's PR (#6011, filed _after_ that bullet was added) still added a new
 root-level `.md` file plus edited three other markdown files as its "fix" — a plausible-looking wrong
 interpretation the gate had nothing more explicit to check against, since the constraint wasn't
 phrased as an unambiguous, standalone rule.
@@ -103,6 +105,7 @@ phrased as an unambiguous, standalone rule.
 **How to apply, every time a deliverable's file type/path/format actually matters (not just docs —
 also applies to "this must be a native GraphQL mutation not a markdown checklist," "this must reuse
 the existing X pattern not invent a new one," etc.):**
+
 - State the hard constraint as its own callout or leading Requirements bullet, not folded into
   prose Context.
 - Name the exact file path/pattern the deliverable must match.
@@ -110,10 +113,10 @@ the existing X pattern not invent a new one," etc.):**
   "adding a new `.md` file anywhere in the repo, including the root," "editing README.md to add this
   content instead of creating the route file").
 - For anything doc-shaped, use language close to: `> ⚠️ Read this before starting. The deliverable
-  is a website page at <exact path>. It is not a markdown file. A PR that adds/edits any .md file as
-  the fix does NOT resolve this issue and will be closed.` — see #5996 or any of #6012's sub-issues
+is a website page at <exact path>. It is not a markdown file. A PR that adds/edits any .md file as
+the fix does NOT resolve this issue and will be closed.` — see #5996 or any of #6012's sub-issues
   for the exact wording already proven out.
-- Assume the issue text is the *only* thing an AI-harness-driven contributor's agent will read before
+- Assume the issue text is the _only_ thing an AI-harness-driven contributor's agent will read before
   acting — don't assume it will also read this skill file, the repo's CLAUDE.md, or common sense
   about the file type.
 
@@ -138,24 +141,30 @@ the existing X pattern not invent a new one," etc.):**
 
 ```md
 ## Context
+
 <what exists today, cite real file paths / function names, why this matters>
 
 ## Requirements
+
 <concrete, testable requirements — no "TBD" or "explore options" for anything actually decidable now>
 
 ## Deliverables
+
 - [ ] <concrete artifact 1>
 - [ ] <concrete artifact 2>
 
 ## Test Coverage Requirements
+
 <explicit 99%+ Codecov patch target / 100% target including invariants + a regression test for any
-fix — note explicitly if the touched paths are outside coverage.include, e.g. apps/**, so a future
+fix — note explicitly if the touched paths are outside coverage.include, e.g. apps/\*\*, so a future
 reader isn't confused about why Codecov doesn't gate it>
 
 ## Expected Outcome
+
 <what's true after this ships that wasn't true before>
 
 ## Links & Resources
+
 <related issues, the files to anchor on>
 ```
 
@@ -178,8 +187,24 @@ issue out of order would waste a contributor's time or produce broken intermedia
 Prefer these over a markdown checklist for any new tracker/epic:
 
 ```graphql
-mutation { addSubIssue(input: { issueId: "<parent node id>", subIssueId: "<child node id>" }) { issue { number } } }
-mutation { addBlockedBy(input: { issueId: "<blocked node id>", blockedById: "<blocker node id>" }) { issue { number } } }
+mutation {
+  addSubIssue(
+    input: { issueId: "<parent node id>", subIssueId: "<child node id>" }
+  ) {
+    issue {
+      number
+    }
+  }
+}
+mutation {
+  addBlockedBy(
+    input: { issueId: "<blocked node id>", blockedById: "<blocker node id>" }
+  ) {
+    issue {
+      number
+    }
+  }
+}
 ```
 
 Get an issue's GraphQL node ID via `gh api graphql -f query='query { repository(owner:"JSONbored", name:"gittensory") { issue(number: N) { id } } }'` (note: literal query strings without file interpolation are fine with `-f`; only the `@file` file-read syntax requires `-F`).
