@@ -198,7 +198,10 @@ mutation {
 }
 mutation {
   addBlockedBy(
-    input: { issueId: "<blocked node id>", blockedById: "<blocker node id>" }
+    input: {
+      issueId: "<blocked node id>"
+      blockingIssueId: "<blocker node id>"
+    }
   ) {
     issue {
       number
@@ -208,6 +211,8 @@ mutation {
 ```
 
 Get an issue's GraphQL node ID via `gh api graphql -f query='query { repository(owner:"JSONbored", name:"gittensory") { issue(number: N) { id } } }'` (note: literal query strings without file interpolation are fine with `-f`; only the `@file` file-read syntax requires `-F`).
+
+**`addBlockedBy`'s second input field is `blockingIssueId`, not `blockedById`** — confirmed the hard way, 2026-07-15: an earlier version of this doc had the wrong field name and the mutation failed with `missingRequiredInputObjectAttribute` until corrected. The example above is now right; if it ever fails again with that error, re-check the schema rather than assuming the doc is still correct.
 
 ## gh CLI gotchas already hit doing this work
 
