@@ -10,6 +10,7 @@ import {
 } from "./lib/portfolio-queue";
 import { PortfolioPage, PortfolioQueueView } from "./routes/portfolio";
 import { handlePortfolioQueueRequest, type PortfolioQueueApiDeps } from "../vite-portfolio-queue-api";
+import type { PortfolioDashboardSummary } from "../../../packages/loopover-miner/lib/portfolio-dashboard.js";
 
 // Test-local fixture factory (was a lib export reachable only from tests; moved here per #6187).
 const emptyPortfolioQueueSummary = (): PortfolioQueueSummary => ({
@@ -31,6 +32,7 @@ const fixtureSummary: PortfolioQueueSummary = {
 
 const rawQueueRows = [
   {
+    apiBaseUrl: "https://api.github.com",
     repoFullName: "private-org/secret-repo",
     identifier: "issue:12",
     priority: 5,
@@ -38,6 +40,7 @@ const rawQueueRows = [
     enqueuedAt: "2026-07-10T06:00:00.000Z",
   },
   {
+    apiBaseUrl: "https://api.github.com",
     repoFullName: "private-org/secret-repo",
     identifier: "issue:13",
     priority: 3,
@@ -45,6 +48,7 @@ const rawQueueRows = [
     enqueuedAt: "2026-07-10T06:05:00.000Z",
   },
   {
+    apiBaseUrl: "https://api.github.com",
     repoFullName: "private-org/another-repo",
     identifier: "issue:7",
     priority: 8,
@@ -52,6 +56,7 @@ const rawQueueRows = [
     enqueuedAt: "2026-07-10T05:00:00.000Z",
   },
   {
+    apiBaseUrl: "https://api.github.com",
     repoFullName: "private-org/another-repo",
     identifier: "issue:8",
     priority: 1,
@@ -304,18 +309,29 @@ describe("fetchPortfolioQueue (#4306)", () => {
 function fakeCollectPortfolioDashboard(
   sources: { portfolioQueue: { listQueue: () => Array<{ repoFullName: string; status: string; enqueuedAt: string }> } },
   options: { nowMs: number },
-): PortfolioQueueSummary {
+): PortfolioDashboardSummary {
   const byStatus = { queued: 0, in_progress: 0, done: 0 };
-  const perRepo = new Map<string, { repoFullName: string; byStatus: typeof byStatus; total: number }>();
+  const perRepo = new Map<
+    string,
+    { apiBaseUrl: string; repoFullName: string; byStatus: typeof byStatus; total: number }
+  >();
   let total = 0;
   let oldestQueuedMs: number | null = null;
   for (const entry of sources.portfolioQueue.listQueue()) {
     const status = entry.status as "queued" | "in_progress" | "done";
+    // The real aggregator keys per repo by (apiBaseUrl, repoFullName) (#7241); the queue rows carry the forge
+    // host, which the middleware republishes so the UI can label same-name repos on different forges apart.
+    const apiBaseUrl = (entry as typeof entry & { apiBaseUrl: string }).apiBaseUrl;
     total += 1;
     byStatus[status] += 1;
     let repo = perRepo.get(entry.repoFullName);
     if (!repo) {
-      repo = { repoFullName: entry.repoFullName, byStatus: { queued: 0, in_progress: 0, done: 0 }, total: 0 };
+      repo = {
+        apiBaseUrl,
+        repoFullName: entry.repoFullName,
+        byStatus: { queued: 0, in_progress: 0, done: 0 },
+        total: 0,
+      };
       perRepo.set(entry.repoFullName, repo);
     }
     repo.byStatus[status] += 1;
@@ -360,11 +376,13 @@ describe("handlePortfolioQueueRequest (#4306, reunified with the CLI's queue das
       byStatus: { queued: 2, in_progress: 1, done: 1 },
       repos: [
         {
+          apiBaseUrl: "https://api.github.com",
           repoFullName: "private-org/another-repo",
           byStatus: { queued: 1, in_progress: 0, done: 1 },
           total: 2,
         },
         {
+          apiBaseUrl: "https://api.github.com",
           repoFullName: "private-org/secret-repo",
           byStatus: { queued: 1, in_progress: 1, done: 0 },
           total: 2,
