@@ -4587,6 +4587,25 @@ export async function listCheckSummaries(env: Env, fullName: string, pullNumber:
   return rows.map(toCheckSummaryRecord);
 }
 
+// #7514 (review-burst): fetch the single canonical summary for a (repo, head, check-name) tuple -- the same
+// composite key upsertCheckSummary conflicts on, so at most one row matches. Lets a re-review of an unchanged
+// head compare its would-be gate conclusion against the one already published for that head before overwriting
+// it, mirroring the byte-identical no-op signal #6724 added for the comment/label surfaces.
+export async function getCheckSummaryByHead(
+  env: Env,
+  fullName: string,
+  headSha: string,
+  name: string,
+): Promise<CheckSummaryRecord | null> {
+  const db = getDb(env.DB);
+  const rows = await db
+    .select()
+    .from(checkSummaries)
+    .where(and(eq(checkSummaries.repoFullName, fullName), eq(checkSummaries.headSha, headSha), eq(checkSummaries.name, name)))
+    .limit(1);
+  return rows[0] ? toCheckSummaryRecord(rows[0]) : null;
+}
+
 export async function upsertRecentMergedPullRequest(env: Env, pr: RecentMergedPullRequestRecord): Promise<void> {
   const db = getDb(env.DB);
   await db

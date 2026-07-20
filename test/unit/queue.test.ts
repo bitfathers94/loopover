@@ -6022,11 +6022,9 @@ describe("queue processors", () => {
         AI_DAILY_NEURON_BUDGET: "100000",
       });
       await seedRegateChurnRepo(env, { publicSurface: "comment_and_label" });
-      // reviewCheckMode: "disabled" isolates the comment/label no-op path this test is about -- with the gate
-      // check-run enabled (as most gateEnabled repos are), gate_check_run publishes fresh every pass regardless
-      // of comment/label content, which correctly keeps surfaceContentChanged true by this fix's own conservative
-      // design (only a PUBLISHED-OUTPUTS SET of exactly comment/label can ever be marked unchanged). Extending a
-      // similar no-op signal to gate_check_run is a separate, not-yet-implemented scope -- see the PR description.
+      // reviewCheckMode: "disabled" isolates the comment/label no-op path this test is about -- the gate_check_run
+      // surface has its own byte-identical no-op signal now (#7514, exercised by the gate-only test below), but
+      // keeping the gate off here proves the comment/label branch stands on its own.
       await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { commentMode: "all_prs", publicSurface: "comment_and_label", checkRunMode: "off", reviewCheckMode: "disabled", aiReviewMode: "block" }, review: { auto_review: { cadence: "continuous" } } });
       await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 71, title: "Fix the retry loop", state: "open", user: { login: "contributor" }, head: { sha: "a71" }, labels: [], body: "Closes #1" });
       await upsertPullRequestDetailSyncState(env, { repoFullName: "JSONbored/gittensory", pullNumber: 71, status: "complete", reviewsSyncedAt: new Date().toISOString() });
@@ -6096,7 +6094,7 @@ describe("queue processors", () => {
       expect(noopAudit?.detail).toContain("no visible change");
     });
 
-    it("#6724 (review-burst): a comment-unchanged pass that newly applies a previously-missing label still records a fresh pr_public_surface_published", async () => {
+    it("#6724/#7514 (review-burst): a re-applied label still records a fresh pr_public_surface_published even when the comment AND the gate check-run are both no-ops", async () => {
       const env = createTestEnv({
         GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
         AI: { run: async () => ({ response: JSON.stringify({ assessment: "Looks fine.", blockers: [], nits: [], suggestions: [] }) }) } as unknown as Ai,
@@ -6104,7 +6102,12 @@ describe("queue processors", () => {
         AI_PUBLIC_COMMENTS_ENABLED: "true",
         AI_DAILY_NEURON_BUDGET: "100000",
       });
-      await seedRegateChurnRepo(env, { publicSurface: "comment_and_label" });
+      // autoLabelEnabled turns the gittensor LABEL surface on (so `willLabel` is true and "label" is a real
+      // publishedOutput here) -- without it the gittensor label never publishes and the case degenerates. With the
+      // gate check-run enabled too (reviewCheckMode: "required"), the SECOND pass's comment and gate conclusion are
+      // both byte-identical no-ops (#6724 + #7514); only the re-applied label makes it a genuine change, which must
+      // still count as a fresh publish. This is the exact inverse of #7514's all-surfaces-no-op suppression below.
+      await seedRegateChurnRepo(env, { publicSurface: "comment_and_label", autoLabelEnabled: true });
       await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { commentMode: "all_prs", publicSurface: "comment_and_label", checkRunMode: "off", reviewCheckMode: "required", aiReviewMode: "block" }, review: { auto_review: { cadence: "continuous" } } });
       await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 72, title: "Fix the retry loop", state: "open", user: { login: "contributor" }, head: { sha: "a72" }, labels: [], body: "Closes #1" });
       await upsertPullRequestDetailSyncState(env, { repoFullName: "JSONbored/gittensory", pullNumber: 72, status: "complete", reviewsSyncedAt: new Date().toISOString() });
@@ -6134,11 +6137,11 @@ describe("queue processors", () => {
           stickyComment.current = { id: 1, body };
           return Response.json({ id: 1 }, { status: 200 });
         }
-        // The label is missing on the first pass (proving the FIRST publish is real), then present by the second
-        // -- but this test simulates it being manually removed again right before the second pass, so the second
-        // pass's own POST is what flips labelPresent back to true, proving a genuinely NEW label application
-        // still counts as a real change even though the comment itself renders byte-identical.
-        if (url.includes("/issues/72/labels") && method === "GET") return Response.json(labelPresent ? [{ name: "gittensor" }] : []);
+        // The type label (gittensor:bug, inferred from the title) is ALWAYS present so its own repair never POSTs
+        // -- isolating labelPosts to the gittensor SURFACE label, which is missing on pass 1 (proving the first
+        // publish is real), then simulated as manually removed again right before pass 2, so the second pass's own
+        // POST re-applies it: a genuinely NEW label surface change even though the comment + gate are byte-identical.
+        if (url.includes("/issues/72/labels") && method === "GET") return Response.json(labelPresent ? [{ name: "gittensor" }, { name: "gittensor:bug" }] : [{ name: "gittensor:bug" }]);
         if (url.includes("/issues/72/labels") && method === "POST") {
           labelPosts += 1;
           labelPresent = true;
@@ -6158,7 +6161,7 @@ describe("queue processors", () => {
       const published = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
         .bind("github_app.pr_public_surface_published", "JSONbored/gittensory#72")
         .first<{ n: number }>();
-      expect(published?.n).toBe(2); // both passes are real publishes -- comment unchanged, but the label DID change
+      expect(published?.n).toBe(2); // both passes are real publishes -- comment + gate unchanged, but the label DID change
       const noopAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
         .bind("github_app.pr_public_surface_republish_noop", "JSONbored/gittensory#72")
         .first<{ n: number }>();
@@ -6206,6 +6209,90 @@ describe("queue processors", () => {
         .bind("github_app.pr_public_surface_republish_noop", "JSONbored/gittensory#73")
         .first<{ n: number }>();
       expect(noopAudit?.n).toBe(0);
+    });
+
+    it("#7514 (review-burst): a re-review over an unchanged head that republishes the gate check-run with an identical conclusion records republish_noop, not a fresh pr_public_surface_published", async () => {
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => ({ response: JSON.stringify({ assessment: "Looks fine.", blockers: [], nits: [], suggestions: [] }) }) } as unknown as Ai,
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+        AI_DAILY_NEURON_BUDGET: "100000",
+      });
+      await seedRegateChurnRepo(env, { publicSurface: "comment_and_label" });
+      // reviewCheckMode: "required" turns the gate check-run on (the common case the incident targets) alongside a
+      // byte-identical comment + already-present label -- so the ONLY thing that could still count the second pass
+      // as a fresh publish is gate_check_run's presence, which #7514's no-op signal now suppresses.
+      await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { commentMode: "all_prs", publicSurface: "comment_and_label", checkRunMode: "off", reviewCheckMode: "required", aiReviewMode: "block" }, review: { auto_review: { cadence: "continuous" } } });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 74, title: "Fix the retry loop", state: "open", user: { login: "contributor" }, head: { sha: "a74" }, base: { ref: "main" }, labels: [], body: "Closes #1" });
+      await upsertPullRequestDetailSyncState(env, { repoFullName: "JSONbored/gittensory", pullNumber: 74, status: "complete", reviewsSyncedAt: new Date().toISOString() });
+
+      const stickyComment: { current: { id: number; body: string } | null } = { current: null };
+      let commentPatches = 0;
+      let gateCheckPublishes = 0;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+        if (url.includes("/pulls/74/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+        if (/\/pulls\/74(?:\?|$)/.test(url)) return Response.json({ number: 74, title: "Fix the retry loop", state: "open", user: { login: "contributor" }, head: { sha: "a74" }, base: { ref: "main", sha: "base" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
+        if (url.includes("/commits/a74/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes("/commits/a74/status")) return Response.json({ state: "success", statuses: [] });
+        if (url.includes("/commits/a74/check-suites")) return Response.json({ check_suites: [] });
+        if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+        if (url.includes("/issues/74/comments") && method === "GET") {
+          return Response.json(stickyComment.current ? [{ ...stickyComment.current, user: { login: "loopover-orb[bot]", type: "Bot" } }] : []);
+        }
+        if (url.includes("/issues/74/comments") && method === "POST") {
+          const body = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+          stickyComment.current = { id: 1, body };
+          return Response.json({ id: 1 }, { status: 201 });
+        }
+        if (url.includes("/issues/comments/1") && method === "PATCH") {
+          commentPatches += 1;
+          const body = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+          stickyComment.current = { id: 1, body };
+          return Response.json({ id: 1 }, { status: 200 });
+        }
+        if (url.includes("/issues/74/labels") && method === "GET") return Response.json([{ name: "gittensor" }, { name: "gittensor:bug" }]);
+        if (url.includes("/issues/74/labels") && method === "POST") return Response.json([]);
+        // Gate check-run: a pending in_progress POST, then a finalizing PATCH that carries the real conclusion.
+        if (url.includes("/check-runs") && method === "POST") {
+          const body = JSON.parse(String(init?.body ?? "{}")) as { status?: string; conclusion?: string };
+          if (body.status !== "in_progress" || body.conclusion) gateCheckPublishes += 1;
+          return Response.json({ id: 901 }, { status: 201 });
+        }
+        if (url.includes("/check-runs/901") && method === "PATCH") {
+          gateCheckPublishes += 1;
+          return Response.json({ id: 901 });
+        }
+        if (url.includes("/check-runs") && method === "GET") return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+        return Response.json({});
+      });
+
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "webhook-open", repoFullName: "JSONbored/gittensory", prNumber: 74, installationId: 123 });
+      expect(gateCheckPublishes).toBeGreaterThan(0); // the gate check-run really published this pass
+      const publishedAfterFirst = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
+        .bind("github_app.pr_public_surface_published", "JSONbored/gittensory#74")
+        .first<{ n: number }>();
+      expect(publishedAfterFirst?.n).toBe(1); // first pass is a real publish (brand-new comment + first gate check)
+      const patchesAfterFirst = commentPatches;
+
+      // A later regate-sweep pass over the SAME head: AI cache hit, comment byte-identical, label present, and the
+      // gate check-run re-renders the SAME conclusion -- nothing visible changes on the PR.
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "regate-sweep:JSONbored/gittensory#74:1", repoFullName: "JSONbored/gittensory", prNumber: 74, installationId: 123 });
+
+      expect(commentPatches).toBe(patchesAfterFirst); // no additional comment PATCH -- the re-render is byte-identical
+      const publishedAfterSecond = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
+        .bind("github_app.pr_public_surface_published", "JSONbored/gittensory#74")
+        .first<{ n: number }>();
+      expect(publishedAfterSecond?.n).toBe(1); // NOT a second durable publish -- gate_check_run no-op is the #7514 fix
+      const noopAudit = await env.DB.prepare("select count(*) as n, detail from audit_events where event_type = ? and target_key = ? group by detail")
+        .bind("github_app.pr_public_surface_republish_noop", "JSONbored/gittensory#74")
+        .first<{ n: number; detail: string }>();
+      expect(noopAudit?.n).toBe(1);
+      expect(noopAudit?.detail).toContain("no visible change");
     });
 
     it("REGRESSION (#6685): a draft PR's repeat fork-CI-completion triggers stop republishing once the head is already current", async () => {

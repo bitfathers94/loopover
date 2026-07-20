@@ -8385,6 +8385,12 @@ async function maybePublishPrPublicSurface(
   // attempt, and for output kinds with no cheap no-op signal (gate_check_run, check_run).
   let commentContentChanged = true;
   let labelContentChanged = true;
+  // #7514 (review-burst): extends #6724's no-op signal to the gate_check_run surface -- true until a gate
+  // publish over an unchanged head proves its conclusion is byte-identical to the one already published for that
+  // head (recordPublishedGateCheckSummary returns the answer, read before it overwrites the row). Stays true for
+  // any pass that does not reach the main gate publish (the error-fallback publishes keep the conservative
+  // default), so a stable-verdict retry storm stops inflating the burst counter without ever hiding a real change.
+  let gateContentChanged = true;
   const reviewedHeadSha = reviewedPullRequestHeadSha(pr.headSha, advisory.headSha);
   const freshnessForReviewOutput = (phase: string): Promise<PullRequestFreshness> =>
     reviewTargetFreshness(env, {
@@ -9959,7 +9965,10 @@ async function maybePublishPrPublicSurface(
         if (gateCheckResult?.kind === "published") {
           gateFinalized = true;
           publishedOutputs.push("gate_check_run");
-          await recordPublishedGateCheckSummary(env, {
+          // #7514 (review-burst): capture whether this gate conclusion actually differs from the one already
+          // published for this exact head. A byte-identical re-render (stable-verdict retry storm) flips this
+          // false, letting surfaceContentChanged below treat gate_check_run as a no-op just like comment/label.
+          gateContentChanged = await recordPublishedGateCheckSummary(env, {
             repoFullName,
             pullNumber: pr.number,
             headSha: advisory.headSha,
@@ -9981,6 +9990,8 @@ async function maybePublishPrPublicSurface(
                 error: errorMessage(error),
               }),
             );
+            /* v8 ignore next -- defensive: a failed summary upsert conservatively reports the gate as changed. */
+            return true;
           });
         }
         if (gateCheckResult?.kind === "permission_missing") {
@@ -10784,14 +10795,16 @@ async function maybePublishPrPublicSurface(
       if (isGitHubRateLimitedError(error)) throw error;
     }
   }
-  // #6724 (review-burst): only a PUBLISHED-OUTPUTS SET of exactly comment/label (both proven no-ops, or absent
-  // entirely) counts as a no-op pass. Any other output kind in this pass (gate_check_run, check_run) has no
-  // cheap no-op signal, so its mere presence keeps this true -- conservative by design, this can only ever
-  // suppress a pr_public_surface_published record for a pass PROVEN to have changed nothing, never the reverse.
+  // #6724/#7514 (review-burst): a pass counts as a no-op only when every published surface is a proven no-op.
+  // comment, label, and now gate_check_run each carry a byte-identical signal (commentContentChanged /
+  // labelContentChanged / gateContentChanged); any OTHER output kind (check_run) has none, so its mere presence
+  // keeps this true. Conservative by design -- this can only suppress a pr_public_surface_published record for a
+  // pass PROVEN to have changed nothing, never the reverse.
   const surfaceContentChanged =
-    publishedOutputs.some((output) => output !== "comment" && output !== "label") ||
+    publishedOutputs.some((output) => output !== "comment" && output !== "label" && output !== "gate_check_run") ||
     (publishedOutputs.includes("comment") && commentContentChanged) ||
-    (publishedOutputs.includes("label") && labelContentChanged);
+    (publishedOutputs.includes("label") && labelContentChanged) ||
+    (publishedOutputs.includes("gate_check_run") && gateContentChanged);
   return finishPublicSurfacePublication(surfaceContentChanged);
 }
 

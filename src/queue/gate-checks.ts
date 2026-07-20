@@ -6,7 +6,7 @@
 // share no state and have no caller besides processors.ts's own many disposition/publish call sites, so
 // they group cleanly by concern here.
 
-import { recordAuditEvent, upsertCheckSummary } from "../db/repositories";
+import { getCheckSummaryByHead, recordAuditEvent, upsertCheckSummary } from "../db/repositories";
 import { LOOPOVER_GATE_CHECK_NAME } from "../github/app";
 import { guardrailPathMatches } from "../signals/change-guardrail";
 import type { RepositorySettings } from "../types";
@@ -31,9 +31,17 @@ export async function recordPublishedGateCheckSummary(
     detailsUrl?: string | undefined;
     deliveryId: string;
   },
-): Promise<void> {
+): Promise<boolean> {
   /* v8 ignore next -- createOrUpdateNamedCheckRun returns null without a head SHA, so published results have one. */
-  if (!args.headSha) return;
+  if (!args.headSha) return true;
+  // #7514 (review-burst): read the summary already published for this exact (repo, head, gate-name) BEFORE the
+  // upsert below overwrites it. A re-review of an unchanged head that lands the SAME conclusion re-renders the
+  // gate check-run byte-identically -- nothing visible changes on the PR -- so report the gate as unchanged and
+  // let the caller suppress a fresh pr_public_surface_published (the record the review-burst anomaly counter
+  // reads), mirroring #6724's comment/label no-op signal. Conservative: no prior summary (first review of this
+  // head) reads as CHANGED, so a genuine first publish is never suppressed.
+  const priorSummary = await getCheckSummaryByHead(env, args.repoFullName, args.headSha, LOOPOVER_GATE_CHECK_NAME);
+  const conclusionChanged = !priorSummary || (priorSummary.conclusion ?? null) !== (args.conclusion ?? null);
   const completedAt = nowIso();
   await upsertCheckSummary(env, {
     id: String(args.checkRunId),
@@ -52,6 +60,7 @@ export async function recordPublishedGateCheckSummary(
       source: "loopover_gate_check",
     },
   });
+  return conclusionChanged;
 }
 
 export function gateCheckPolicy(
