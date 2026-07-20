@@ -64,7 +64,7 @@ describe("loadMinerFileSecrets (#5178)", () => {
     expect(env.GITHUB_TOKEN).toBe("");
   });
 
-  it("REGRESSION (gate divergence from the ORB analogue): throws a clear, actionable error naming the var and path when the file is missing/unreadable, instead of logging and continuing", () => {
+  it("REGRESSION: throws a clear, actionable error naming the var and path when the file is missing/unreadable (fail-fast; the ORB analogue converged onto this same throw-on-failure behavior in #6284, so neither module is stricter than the other)", () => {
     const readFile = vi.fn(() => {
       throw new Error("ENOENT: no such file or directory");
     });
