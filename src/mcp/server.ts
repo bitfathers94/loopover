@@ -138,6 +138,7 @@ import {
   buildPreflightResult,
   buildPreStartCheck,
   buildPrTextLint,
+  buildPullRequestMaintainerPacket,
   buildQueueHealth,
   buildRegistryChangeReport,
 } from "../signals/engine";
@@ -178,7 +179,7 @@ import { buildProgressSnapshot } from "../loop-progress";
 import { evaluateEscalation } from "../loop-escalation";
 import { buildStructuralImprovementAssessment } from "../signals/improvement";
 import { buildBoundaryTestGenerationFinding, buildBoundaryTestGenerationSpec } from "../signals/boundary-test-generation";
-import { buildRepoDataQuality } from "../signals/data-quality";
+import { attachDataQuality, buildRepoDataQuality } from "../signals/data-quality";
 import { PREFLIGHT_LIMITS } from "../signals/preflight-limits";
 import { SCENARIO_MAX_BRANCH_REF_CHARS, SCENARIO_MAX_LINKED_ISSUE_NUMBERS, SCENARIO_MAX_REPO_FULL_NAME_CHARS } from "../scenarios/input-model";
 import { loadUpstreamStatus } from "../upstream/ruleset";
@@ -1838,6 +1839,7 @@ export const MCP_TOOL_CATEGORIES: Record<string, McpToolCategory> = {
   loopover_get_upstream_drift: "utility",
   loopover_get_issue_quality: "maintainer",
   loopover_get_pr_reviewability: "review",
+  loopover_get_pr_maintainer_packet: "review",
   loopover_validate_linked_issue: "discovery",
   loopover_check_before_start: "discovery",
   loopover_find_opportunities: "discovery",
@@ -2355,6 +2357,17 @@ export class LoopoverMcp {
         outputSchema: freshnessResponseOutputSchema,
       },
       async (input) => this.toolResult(await this.getPrReviewability(input)),
+    );
+
+    register(
+      "loopover_get_pr_maintainer_packet",
+      {
+        description:
+          "Return the maintainer packet for a PR: its review priority, change summary (files/code/test/additions/deletions/top paths), review signals (approvals, change requests, failing checks, linked issues, duplicate collisions), findings, and contributor/maintainer next steps. Metadata-only, repo-scoped, no GitHub writes.",
+        inputSchema: ownerRepoPullShape,
+        outputSchema: freshnessResponseOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getPrMaintainerPacket(input)),
     );
 
     register(
@@ -3277,6 +3290,59 @@ export class LoopoverMcp {
         source: "computed",
         repoFullName: fullName,
         generatedAt: report.generatedAt,
+        report,
+      } as unknown as Record<string, unknown>,
+    };
+  }
+
+  // Mirrors getPrReviewability's shape but for the maintainer packet: the REST route
+  // (GET .../pulls/:number/maintainer-packet) computes fresh from the same cached-metadata bundle on every
+  // call (it never persists a signal snapshot), so this MCP surface computes fresh too — no cache-serving
+  // branch. Same auth boundary (canAccessRepo → the route's requireStaticProtectedApiToken equivalent) and the
+  // same buildPullRequestMaintainerPacket → attachDataQuality assembly the route already uses.
+  private async getPrMaintainerPacket(input: { owner: string; repo: string; number: number }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    if (!(await this.canAccessRepo(fullName))) {
+      return {
+        summary: `Forbidden: session cannot access PR maintainer packet for ${fullName}.`,
+        data: { status: "forbidden", repoFullName: fullName },
+      };
+    }
+    const [repo, pullRequest] = await Promise.all([getRepository(this.env, fullName), getPullRequest(this.env, fullName, input.number)]);
+    if (!repo || !pullRequest) {
+      return {
+        summary: `LoopOver has no cached PR maintainer packet for ${fullName}#${input.number}.`,
+        data: { status: "not_found", repoFullName: fullName },
+      };
+    }
+    const [issues, pullRequests, files, reviews, checks, recentMergedPullRequests] = await Promise.all([
+      listIssues(this.env, fullName),
+      listPullRequests(this.env, fullName),
+      listPullRequestFiles(this.env, fullName, input.number),
+      listPullRequestReviews(this.env, fullName, input.number),
+      listCheckSummaries(this.env, fullName, input.number),
+      listRecentMergedPullRequests(this.env, fullName),
+    ]);
+    const packet = buildPullRequestMaintainerPacket({
+      repo,
+      pullRequest,
+      issues,
+      pullRequests,
+      files,
+      reviews,
+      checks,
+      recentMergedPullRequests,
+      repoFullName: fullName,
+      pullNumber: input.number,
+    });
+    const report = attachDataQuality(packet as unknown as Record<string, unknown>, await this.loadRepoDataQuality(fullName));
+    return {
+      summary: `LoopOver PR maintainer packet for ${fullName}#${input.number} (computed from cached metadata).`,
+      data: {
+        status: "ready",
+        source: "computed",
+        repoFullName: fullName,
+        generatedAt: packet.generatedAt,
         report,
       } as unknown as Record<string, unknown>,
     };

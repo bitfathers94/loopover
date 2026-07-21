@@ -816,6 +816,23 @@ export async function startFixtureServer(
       );
       return;
     }
+    if (request.url === "/v1/repos/owner/repo/pulls/7/maintainer-packet" && request.method === "GET") {
+      response.end(
+        JSON.stringify({
+          repoFullName: "owner/repo",
+          pullNumber: 7,
+          generatedAt: "2026-05-30T00:00:00.000Z",
+          reviewPriority: "review",
+          summary: "PR 7 is ready for a maintainer review.",
+          changeSummary: { fileCount: 2, codeFileCount: 1, testFileCount: 1, additions: 12, deletions: 3, topPaths: ["src/index.ts"] },
+          reviewSignals: { reviewCount: 1, approvalCount: 1, changeRequestCount: 0, checkFailureCount: 0, linkedIssues: [1], collisionClusters: 0 },
+          findings: [],
+          contributorNextSteps: [],
+          maintainerNotes: [],
+        }),
+      );
+      return;
+    }
     // #6619: the route carries the author login as a query param, so match on the path prefix.
     if (request.url?.startsWith("/v1/repos/owner/repo/pulls/7/ai-review-findings") && request.method === "GET") {
       response.end(
