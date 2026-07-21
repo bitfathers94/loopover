@@ -115,6 +115,7 @@ import { loadMaintainerLaneReport, maintainerLaneSummary } from "../services/mai
 import { buildRepoOnboardingPackPreviewForRepo } from "../services/repo-onboarding-pack";
 import { buildRegistrationReadinessResponse, buildGittensorConfigRecommendationResponse } from "../api/routes";
 import { loadGatePrecisionReport } from "../services/gate-precision";
+import { loadOverride, loadShadowOverride, authoritativeGateOverride, toLiveGateThresholdFields, type StorageEnv } from "../review/auto-apply";
 import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
 import {
   applyMcpPlanningChoices,
@@ -969,6 +970,18 @@ const freshnessResponseOutputSchema = {
   freshness: z.string().optional(),
   generatedAt: z.string().optional(),
   report: z.unknown().optional(),
+};
+
+// #7801 - the AMS live-gate-thresholds probe surface, mirrored over MCP. Snake_case fields match the REST
+// route's field-limited projection (toLiveGateThresholdFields); each can be null when the authoritative
+// override carries only some of the three tunables, and the whole set is absent (not_found) when neither a
+// live nor a soaking-shadow override is active.
+const liveGateThresholdsOutputSchema = {
+  status: z.string().optional(),
+  repoFullName: z.string().optional(),
+  confidence_floor: z.number().nullable().optional(),
+  scope_cap_files: z.number().nullable().optional(),
+  scope_cap_lines: z.number().nullable().optional(),
 };
 
 const maintainerMeasurementReportOutputSchema = {
@@ -1837,6 +1850,7 @@ export const MCP_TOOL_CATEGORIES: Record<string, McpToolCategory> = {
   loopover_get_registry_changes: "utility",
   loopover_get_upstream_drift: "utility",
   loopover_get_issue_quality: "maintainer",
+  loopover_get_live_gate_thresholds: "maintainer",
   loopover_get_pr_reviewability: "review",
   loopover_validate_linked_issue: "discovery",
   loopover_check_before_start: "discovery",
@@ -2355,6 +2369,17 @@ export class LoopoverMcp {
         outputSchema: freshnessResponseOutputSchema,
       },
       async (input) => this.toolResult(await this.getPrReviewability(input)),
+    );
+
+    register(
+      "loopover_get_live_gate_thresholds",
+      {
+        description:
+          "Return the currently-authoritative live gate thresholds for a repo: the field-limited snake_case view (confidence_floor, scope_cap_files, scope_cap_lines) of the active gate override, live row winning and a soaking shadow filling in when live is absent. Maintainer-authenticated; not_found when neither is active. Read-only, no GitHub writes.",
+        inputSchema: ownerRepoShape,
+        outputSchema: liveGateThresholdsOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getLiveGateThresholds(input)),
     );
 
     register(
@@ -3279,6 +3304,31 @@ export class LoopoverMcp {
         generatedAt: report.generatedAt,
         report,
       } as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async getLiveGateThresholds(input: { owner: string; repo: string }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    if (!(await this.canAccessRepo(fullName))) {
+      return {
+        summary: `Forbidden: session cannot access live gate thresholds for ${fullName}.`,
+        data: { status: "forbidden", repoFullName: fullName },
+      };
+    }
+    // Mirror the REST route (src/api/routes.ts): the live override wins, a soaking shadow fills in when live is
+    // absent, and a null projection (neither active) is a normal not-found result, never an unhandled throw.
+    const storageEnv = this.env as unknown as StorageEnv;
+    const [live, shadow] = await Promise.all([loadOverride(storageEnv, fullName), loadShadowOverride(storageEnv, fullName)]);
+    const fields = toLiveGateThresholdFields(authoritativeGateOverride(live, shadow));
+    if (!fields) {
+      return {
+        summary: `LoopOver has no active live gate thresholds for ${fullName}.`,
+        data: { status: "not_found", repoFullName: fullName },
+      };
+    }
+    return {
+      summary: `LoopOver live gate thresholds for ${fullName}.`,
+      data: { status: "ready", repoFullName: fullName, ...fields },
     };
   }
 

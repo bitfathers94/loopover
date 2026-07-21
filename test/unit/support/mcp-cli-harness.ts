@@ -760,6 +760,15 @@ export async function startFixtureServer(
       response.end(JSON.stringify({ repoFullName: "owner/repo", generatedAt: "2026-05-30T00:00:00.000Z", issues: [{ number: 12, actionability: "high" }] }));
       return;
     }
+    if (request.url === "/v1/repos/owner/repo/live-gate-thresholds" && request.method === "GET") {
+      if (options.intakeStatus && options.intakeStatus >= 400) {
+        response.statusCode = options.intakeStatus;
+        response.end(JSON.stringify({ error: "live_gate_thresholds_not_found", repoFullName: "owner/repo" }));
+        return;
+      }
+      response.end(JSON.stringify({ repoFullName: "owner/repo", confidence_floor: 0.9, scope_cap_files: 12, scope_cap_lines: 400 }));
+      return;
+    }
     if (request.url === "/v1/repos/owner/repo/registration-readiness" && request.method === "GET") {
       if (options.intakeStatus && options.intakeStatus >= 400) {
         response.statusCode = options.intakeStatus;

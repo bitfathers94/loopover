@@ -1255,6 +1255,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     description: "Return the cached or freshly-computed issue-quality report for a repo, ranking which open issues are actionable, need proof, are stale/duplicate-prone, or already solved.",
   },
   {
+    name: "loopover_get_live_gate_thresholds",
+    category: "maintainer",
+    description:
+      "Return the currently-authoritative live gate thresholds for a repo: the field-limited snake_case view (confidence_floor, scope_cap_files, scope_cap_lines) of the active gate override, live row winning and a soaking shadow filling in when live is absent. Maintainer-authenticated; not_found when neither is active. Read-only.",
+  },
+  {
     name: "loopover_get_registration_readiness",
     category: "maintainer",
     description: "Preview-only registration-readiness report for a repository: what's missing/present before/after registering with LoopOver (direct-PR and issue-discovery lane readiness, label policy, maintainer-cut readiness, queue health, docs, and the GitHub App install state). Advisory only, not a registration action.",
@@ -1487,6 +1493,18 @@ registerStdioTool(
   async ({ owner, repo }: any) => {
     const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
     return toolResult("LoopOver issue-quality report.", await apiGet(`${prefix}/issue-quality`));
+  },
+);
+
+registerStdioTool(
+  "loopover_get_live_gate_thresholds",
+  {
+    description: stdioToolDescription("loopover_get_live_gate_thresholds"),
+    inputSchema: ownerRepoShape,
+  },
+  async ({ owner, repo }: any) => {
+    const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    return toolResult("LoopOver live gate thresholds.", await apiGet(`${prefix}/live-gate-thresholds`));
   },
 );
 
