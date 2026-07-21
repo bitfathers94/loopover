@@ -861,6 +861,15 @@ const gatePrecisionShape = {
     repo: z.string().min(1),
     windowDays: z.number().int().positive().optional(),
 };
+// #6746 family: mirrors src/mcp/server.ts's watchIssuesShape so the same call works against either server.
+// action defaults to `list`; watch/unwatch require repoFullName. labels ([]/omitted = any) filters which new
+// issues notify. The stdio server reaches the same /v1/contributors/:login/watches routes the `watch` CLI does.
+const watchIssuesShape = {
+    login: z.string().min(1),
+    action: z.enum(["watch", "unwatch", "list"]).default("list"),
+    repoFullName: z.string().min(3).max(200).optional(),
+    labels: z.array(z.string().min(1).max(100)).max(50).optional(),
+};
 // Single source of truth for stdio tool name + one-line description (#2233).
 // Registration and `loopover-mcp tools` both read this list.
 const STDIO_TOOL_DESCRIPTORS = [
@@ -1218,6 +1227,11 @@ const STDIO_TOOL_DESCRIPTORS = [
         name: "loopover_get_gate_precision",
         category: "maintainer",
         description: "Return per-gate-type false-positive precision for a repo's recorded gate blocks — blocked / blocked-then-merged counts and false-positive rates with low-sample guards. Optionally bounded by windowDays. Maintainer-authenticated; measurement only.",
+    },
+    {
+        name: "loopover_watch_issues",
+        category: "utility",
+        description: "Watch repos for NEW grabbable, high-multiplier issues (maintainer-created, not WIP). action=watch subscribes a repo (optional label filter), unwatch removes it, list (default) returns your watches. When a matching issue opens you're notified via loopover_list_notifications. Self-scoped to the authenticated login.",
     },
     {
         name: "loopover_open_pr",
@@ -2142,6 +2156,27 @@ registerStdioTool("loopover_get_gate_precision", {
     const query = windowDays ? `?windowDays=${encodeURIComponent(windowDays)}` : "";
     const payload = await apiGet(`${toolRepoBase(owner, repo)}/gate-precision${query}`);
     return toolResult(`Gate precision for ${owner}/${repo}.`, payload);
+});
+// #6746: the contributor-scoped `watch` CLI and remote loopover_watch_issues tool, exposed here as a stdio tool.
+// It reaches the same /v1/contributors/:login/watches routes the `watch` CLI already calls (list=GET,
+// watch=POST, unwatch=DELETE) through the same apiGet/apiPost/apiDelete client -- no new HTTP path. Unlike the
+// CLI, the login is a required tool argument rather than resolved from the session/env, matching the remote
+// tool's schema so the same call works against either server.
+registerStdioTool("loopover_watch_issues", {
+    description: stdioToolDescription("loopover_watch_issues"),
+    inputSchema: watchIssuesShape,
+}, async ({ login, action, repoFullName, labels }) => {
+    const base = `/v1/contributors/${encodeURIComponent(login)}/watches`;
+    if (action === "watch" || action === "unwatch") {
+        // The remote tool reports this as a plain result, not an error, so mirror that rather than throwing.
+        if (!repoFullName)
+            return toolResult(`${action} requires repoFullName.`, {});
+        const payload = action === "watch"
+            ? await apiPost(base, { repoFullName, ...(labels?.length ? { labels } : {}) })
+            : await apiDelete(base, { repoFullName });
+        return toolResult(`LoopOver issue-watch subscriptions for ${login}.`, payload);
+    }
+    return toolResult(`LoopOver issue-watch subscriptions for ${login}.`, await apiGet(base));
 });
 // ── Write-tools (#6149): pure LOCAL-execution spec builders. loopover NEVER performs the write -- each tool
 // returns a spec the caller runs with its OWN gh creds. Brings the local stdio server to parity with the
