@@ -722,6 +722,25 @@ export async function startFixtureServer(
       );
       return;
     }
+    if (request.url === "/v1/upstream/ruleset" && request.method === "GET") {
+      response.end(
+        JSON.stringify({
+          id: "ruleset-1",
+          sourceRepo: "gittensor-core",
+          sourceRef: "main",
+          commitSha: "abc123",
+          sourceSnapshotIds: ["snap-1"],
+          activeModel: { modelId: "model-1" },
+          registryRepoCount: 3,
+          totalEmissionShare: 1,
+          semanticHash: "hash-1",
+          payload: { rules: [] },
+          warnings: [],
+          generatedAt: "2026-05-30T00:00:00.000Z",
+        }),
+      );
+      return;
+    }
     if (request.url === "/v1/repos/owner/repo/intelligence" && request.method === "GET") {
       response.end(
         JSON.stringify({

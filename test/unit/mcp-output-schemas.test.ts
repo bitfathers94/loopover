@@ -1,8 +1,9 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
-import { persistSignalSnapshot, upsertBounty, upsertIssueFromGitHub, upsertPullRequestFromGitHub, upsertRepositoryFromGitHub, updatePullRequestSlopAssessment } from "../../src/db/repositories";
+import { persistSignalSnapshot, persistUpstreamRulesetSnapshot, upsertBounty, upsertIssueFromGitHub, upsertPullRequestFromGitHub, upsertRepositoryFromGitHub, updatePullRequestSlopAssessment } from "../../src/db/repositories";
 import type { AuthIdentity } from "../../src/auth/security";
+import type { UpstreamRulesetSnapshotRecord } from "../../src/types";
 import { LoopoverMcp } from "../../src/mcp/server";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
 import { persistRegistrySnapshot } from "../../src/registry/sync";
@@ -34,6 +35,7 @@ const TOOLS_WITH_OUTPUT_SCHEMA = [
   "loopover_validate_config",
   "loopover_get_registry_changes",
   "loopover_get_upstream_drift",
+  "loopover_get_upstream_ruleset",
   "loopover_local_status",
   "loopover_remediation_plan",
   "loopover_explain_score_breakdown",
@@ -169,6 +171,37 @@ describe("MCP tool calls return schema-valid structured content", () => {
     expect(result.isError).toBeFalsy();
     const data = result.structuredContent as Record<string, unknown>;
     expect(["current", "drift_detected", "stale", "unavailable"]).toContain(data.status);
+  });
+
+  it("loopover_get_upstream_ruleset returns a schema-valid not-found result with no snapshot", async () => {
+    const { client } = await connectTestClient();
+    const result = await client.callTool({ name: "loopover_get_upstream_ruleset", arguments: {} });
+    expect(result.isError).toBeFalsy();
+    expect((result.structuredContent as Record<string, unknown>).status).toBe("upstream_ruleset_not_found");
+  });
+
+  it("loopover_get_upstream_ruleset returns the seeded snapshot as validated structured content", async () => {
+    const env = createTestEnv();
+    await persistUpstreamRulesetSnapshot(env, {
+      id: "ruleset-seed",
+      sourceRepo: "entrius/gittensor",
+      sourceRef: "main",
+      commitSha: "seed-commit",
+      sourceSnapshotIds: [],
+      activeModel: "pending_saturation_model" as unknown as UpstreamRulesetSnapshotRecord["activeModel"],
+      registryRepoCount: 1,
+      totalEmissionShare: 0.01,
+      semanticHash: "seed-hash",
+      payload: {},
+      warnings: [],
+      generatedAt: new Date().toISOString(),
+    });
+    const { client } = await connectTestClient(env);
+    const result = await client.callTool({ name: "loopover_get_upstream_ruleset", arguments: {} });
+    expect(result.isError).toBeFalsy();
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.id).toBe("ruleset-seed");
+    expect(data.status).toBeUndefined();
   });
 
   it("loopover_get_registry_changes returns validated structured content", async () => {

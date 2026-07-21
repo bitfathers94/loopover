@@ -118,6 +118,25 @@ describe("MCP upstream drift tool", () => {
   });
 });
 
+describe("MCP upstream ruleset tool", () => {
+  it("returns the latest cached ruleset snapshot when one exists", async () => {
+    const env = createTestEnv();
+    await persistUpstreamRulesetSnapshot(env, ruleset("ruleset-current", new Date().toISOString()));
+    const mcp = new LoopoverMcp(env) as unknown as { getUpstreamRuleset(): Promise<{ summary: string; data: Record<string, unknown> }> };
+    const payload = await mcp.getUpstreamRuleset();
+    expect(payload.summary).toContain("ruleset-current");
+    expect(payload.data.id).toBe("ruleset-current");
+    expect(payload.data.status).toBeUndefined();
+  });
+
+  it("reports upstream_ruleset_not_found as a normal result when no snapshot exists", async () => {
+    const mcp = new LoopoverMcp(createTestEnv()) as unknown as { getUpstreamRuleset(): Promise<{ summary: string; data: Record<string, unknown> }> };
+    const payload = await mcp.getUpstreamRuleset();
+    expect(payload.summary).toContain("No upstream ruleset snapshot");
+    expect(payload.data.status).toBe("upstream_ruleset_not_found");
+  });
+});
+
 async function getUpstreamDriftSummary(env: Env): Promise<string> {
   const payload = await (new LoopoverMcp(env) as unknown as { getUpstreamDrift(): Promise<{ summary: string }> }).getUpstreamDrift();
   return payload.summary;
