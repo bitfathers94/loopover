@@ -965,6 +965,18 @@ const planRepoIssuesShape = {
   limit: z.number().int().min(1).max(10).optional().default(5),
 };
 
+// #7755: mirrors the remote loopover_generate_contributor_issue_drafts tool's input (src/mcp/server.ts's
+// generateContributorIssueDraftsShape) -- forwarded to POST {repoBase}/contributor-issue-drafts/generate, the
+// same endpoint the `maintain generate-issue-drafts` CLI already calls. dryRun/create carry the route's
+// create-safety (create alone is rejected there); `limit` is capped at 20, matching the route.
+const generateContributorIssueDraftsShape = {
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  dryRun: z.boolean().optional().default(true),
+  create: z.boolean().optional().default(false),
+  limit: z.number().int().min(1).max(20).optional().default(5),
+};
+
 // Single source of truth for stdio tool name + one-line description (#2233).
 // Registration and `loopover-mcp tools` both read this list.
 const STDIO_TOOL_DESCRIPTORS = [
@@ -1398,6 +1410,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     name: "loopover_get_gate_precision",
     category: "maintainer",
     description: "Return per-gate-type false-positive precision for a repo's recorded gate blocks — blocked / blocked-then-merged counts and false-positive rates with low-sample guards. Optionally bounded by windowDays. Maintainer-authenticated; measurement only.",
+  },
+  {
+    name: "loopover_generate_contributor_issue_drafts",
+    category: "maintainer",
+    description:
+      "Generate contributor-facing issue drafts for one repo from its lane/config/queue signals, same as `loopover-mcp maintain generate-issue-drafts`. Dry-run BY DEFAULT: only previews the drafts unless the caller passes BOTH create:true and dryRun:false, so it can never silently open issues. Maintainer access required.",
   },
   {
     name: "loopover_plan_repo_issues",
@@ -2840,6 +2858,26 @@ registerStdioTool(
     return toolResult(`Gate precision for ${owner}/${repo}.`, payload);
   },
   );
+
+registerStdioTool(
+  "loopover_generate_contributor_issue_drafts",
+  {
+    description: stdioToolDescription("loopover_generate_contributor_issue_drafts"),
+    inputSchema: generateContributorIssueDraftsShape,
+  },
+  async ({ owner, repo, dryRun, create, limit }: any) => {
+    // #7755: proxies POST {repoBase}/contributor-issue-drafts/generate (the same endpoint the `maintain
+    // generate-issue-drafts` CLI and the remote loopover_generate_contributor_issue_drafts tool call). The route
+    // re-applies its own explicit_create_requires_dry_run_false guard, so forwarding the schema-defaulted
+    // dryRun/create verbatim keeps the create-safety exact: `create` alone (dryRun still true) is rejected; only
+    // an explicit {create:true, dryRun:false} reaches the write path.
+    const payload = await apiPost(`${toolRepoBase(owner, repo)}/contributor-issue-drafts/generate`, { dryRun, create, limit });
+    return toolResult(
+      `Contributor issue drafts for ${owner}/${repo} (dryRun=${payload.dryRun}): ${payload.proposed} proposed, ${payload.created} created.`,
+      payload,
+    );
+  },
+);
 
 registerStdioTool(
   "loopover_plan_repo_issues",
