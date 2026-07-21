@@ -19,12 +19,20 @@ export const IDEA_CONSTRAINT_MAX_CHARS = 200;
 
 export type IdeaPriority = "normal" | "high";
 
+/** Where an idea's work lands. `existing` is a BYOR repo the renter already owns; `provision` is an
+ *  auto-provisioned repo (APR, #7589) that does not exist yet — so downstream consumers (AMS discovery,
+ *  the provisioning driver) can tell which path a submission takes rather than silently assuming a repo is
+ *  already there. This bridge stays pure: it only carries the discriminant, it never creates a repo. */
+export type IdeaTarget =
+  | { kind: "existing"; repo: string }
+  | { kind: "provision" };
+
 /** The raw input a renter provides (spec §1). */
 export type IdeaSubmission = {
   id: string;
   title: string;
   body: string;
-  targetRepo: string;
+  targetRepo: IdeaTarget;
   constraints?: string[] | undefined;
   acceptanceHints?: string[] | undefined;
   priority?: IdeaPriority | undefined;
@@ -92,7 +100,9 @@ export function validateIdeaSubmission(raw: unknown): IdeaValidationResult {
   if (!isNonEmptyString(input.body)) errors.push("body_required");
   else if (input.body.length > IDEA_BODY_MAX_CHARS) errors.push("body_too_long");
   // `owner/name`, each segment a GitHub-legal slug — an uninstallable/malformed repo is rejected at intake,
-  // never scored, since it can never produce a `go`.
+  // never scored, since it can never produce a `go`. A renter names a concrete repo here, so a validated
+  // submission is always an `existing` target; the `provision` variant is set by the APR path (#7589) that
+  // constructs an IdeaSubmission directly, never inferred from renter free-text.
   if (!isNonEmptyString(input.targetRepo)) errors.push("target_repo_required");
   else if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(input.targetRepo)) errors.push("target_repo_malformed");
 
@@ -116,7 +126,7 @@ export function validateIdeaSubmission(raw: unknown): IdeaValidationResult {
       id: input.id as string,
       title: input.title as string,
       body: input.body as string,
-      targetRepo: input.targetRepo as string,
+      targetRepo: { kind: "existing", repo: input.targetRepo as string },
       constraints: constraints as string[] | undefined,
       acceptanceHints: acceptanceHints as string[] | undefined,
       priority: priority as IdeaPriority | undefined,
@@ -254,7 +264,11 @@ export type ClaimPlan = {
  *  (#4798) to the claim/code/submit loop. Each issue is dispositioned by its already-computed feasibility
  *  verdict — `go` → claimable, `raise` → deferred, `avoid` → skipped — preserving the graph's own
  *  dependency-respecting order so a prerequisite is always claimed before its dependents. No IO, no claiming. */
-export function buildClaimPlan(graph: TaskGraph, targetRepo: string): ClaimPlan {
+export function buildClaimPlan(graph: TaskGraph, target: IdeaTarget): ClaimPlan {
+  // Claim/code/submit acts on a concrete repo. An `existing` target names it directly; a `provision` target
+  // has no repo until the driver creates it (#7589), so the plan carries an empty repo — the loop holds it
+  // until provisioning resolves. No repo-creation happens here; this stays a pure routing step.
+  const targetRepo = target.kind === "existing" ? target.repo : "";
   const claimable: ClaimStep[] = [];
   const deferred: ClaimStep[] = [];
   const skipped: ClaimStep[] = [];

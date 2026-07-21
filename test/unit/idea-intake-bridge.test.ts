@@ -13,6 +13,15 @@ import {
 } from "../../packages/loopover-engine/src/idea-intake";
 
 function validIdea(overrides: Partial<IdeaSubmission> = {}): IdeaSubmission {
+  return {
+    id: "idea-1", title: "One-line intent", body: "A freeform description of the outcome.",
+    targetRepo: { kind: "existing", repo: "acme/widgets" }, ...overrides,
+  };
+}
+
+// Raw renter input (pre-validation): `targetRepo` is a plain `owner/name` string, which validation wraps
+// into the `existing` IdeaTarget variant. Loosely typed so a test can inject a deliberately-invalid field.
+function rawIdea(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return { id: "idea-1", title: "One-line intent", body: "A freeform description of the outcome.", targetRepo: "acme/widgets", ...overrides };
 }
 
@@ -47,44 +56,49 @@ describe("validateIdeaSubmission", () => {
   });
 
   it("flags over-length title and body", () => {
-    const r = validateIdeaSubmission(validIdea({ title: "x".repeat(IDEA_TITLE_MAX_CHARS + 1), body: "y".repeat(IDEA_BODY_MAX_CHARS + 1) }));
+    const r = validateIdeaSubmission(rawIdea({ title: "x".repeat(IDEA_TITLE_MAX_CHARS + 1), body: "y".repeat(IDEA_BODY_MAX_CHARS + 1) }));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.errors).toEqual(expect.arrayContaining(["title_too_long", "body_too_long"]));
   });
 
   it("flags a malformed targetRepo (must be owner/name)", () => {
-    expect(validateIdeaSubmission(validIdea({ targetRepo: "no-slash" })).ok).toBe(false);
-    expect(validateIdeaSubmission(validIdea({ targetRepo: "a/b/c" })).ok).toBe(false);
-    expect(validateIdeaSubmission(validIdea({ targetRepo: "owner/name" })).ok).toBe(true);
+    // Raw renter input names the repo as a plain `owner/name` string; validation wraps a good one into the
+    // `existing` IdeaTarget variant, so a well-formed submission validates to that shape.
+    const raw = { id: "i", title: "t", body: "b" };
+    expect(validateIdeaSubmission({ ...raw, targetRepo: "no-slash" }).ok).toBe(false);
+    expect(validateIdeaSubmission({ ...raw, targetRepo: "a/b/c" }).ok).toBe(false);
+    const good = validateIdeaSubmission({ ...raw, targetRepo: "owner/name" });
+    expect(good.ok).toBe(true);
+    if (good.ok) expect(good.idea.targetRepo).toEqual({ kind: "existing", repo: "owner/name" });
   });
 
   it("flags invalid constraints (non-array, non-string element, over-length entry)", () => {
-    expect((validateIdeaSubmission(validIdea({ constraints: "x" as unknown as string[] }))).ok).toBe(false);
-    expect((validateIdeaSubmission(validIdea({ constraints: [1] as unknown as string[] }))).ok).toBe(false);
-    const long = validateIdeaSubmission(validIdea({ constraints: ["c".repeat(IDEA_CONSTRAINT_MAX_CHARS + 1)] }));
+    expect((validateIdeaSubmission(rawIdea({ constraints: "x" as unknown as string[] }))).ok).toBe(false);
+    expect((validateIdeaSubmission(rawIdea({ constraints: [1] as unknown as string[] }))).ok).toBe(false);
+    const long = validateIdeaSubmission(rawIdea({ constraints: ["c".repeat(IDEA_CONSTRAINT_MAX_CHARS + 1)] }));
     expect(long.ok).toBe(false);
     if (!long.ok) expect(long.errors).toContain("constraint_too_long");
-    expect(validateIdeaSubmission(validIdea({ constraints: ["ok"] })).ok).toBe(true);
+    expect(validateIdeaSubmission(rawIdea({ constraints: ["ok"] })).ok).toBe(true);
   });
 
   it("flags invalid acceptanceHints and an invalid priority", () => {
-    expect(validateIdeaSubmission(validIdea({ acceptanceHints: "x" as unknown as string[] })).ok).toBe(false);
-    expect(validateIdeaSubmission(validIdea({ acceptanceHints: [2] as unknown as string[] })).ok).toBe(false);
-    expect(validateIdeaSubmission(validIdea({ priority: "urgent" as unknown as IdeaSubmission["priority"] })).ok).toBe(false);
-    expect(validateIdeaSubmission(validIdea({ priority: "normal" })).ok).toBe(true);
+    expect(validateIdeaSubmission(rawIdea({ acceptanceHints: "x" as unknown as string[] })).ok).toBe(false);
+    expect(validateIdeaSubmission(rawIdea({ acceptanceHints: [2] as unknown as string[] })).ok).toBe(false);
+    expect(validateIdeaSubmission(rawIdea({ priority: "urgent" as unknown as IdeaSubmission["priority"] })).ok).toBe(false);
+    expect(validateIdeaSubmission(rawIdea({ priority: "normal" })).ok).toBe(true);
   });
 
   it("caps acceptanceHints entry length at IDEA_CONSTRAINT_MAX_CHARS, same bound as constraints (#7243)", () => {
-    const atCap = validateIdeaSubmission(validIdea({ acceptanceHints: ["h".repeat(IDEA_CONSTRAINT_MAX_CHARS)] }));
+    const atCap = validateIdeaSubmission(rawIdea({ acceptanceHints: ["h".repeat(IDEA_CONSTRAINT_MAX_CHARS)] }));
     expect(atCap.ok).toBe(true);
 
-    const overCap = validateIdeaSubmission(validIdea({ acceptanceHints: ["h".repeat(IDEA_CONSTRAINT_MAX_CHARS + 1)] }));
+    const overCap = validateIdeaSubmission(rawIdea({ acceptanceHints: ["h".repeat(IDEA_CONSTRAINT_MAX_CHARS + 1)] }));
     expect(overCap.ok).toBe(false);
     if (!overCap.ok) expect(overCap.errors).toContain("acceptance_hint_too_long");
   });
 
   it("does not raise acceptance_hint_too_long for a malformed (non-array) acceptanceHints — shape error only", () => {
-    const r = validateIdeaSubmission(validIdea({ acceptanceHints: "x".repeat(IDEA_CONSTRAINT_MAX_CHARS + 1) as unknown as string[] }));
+    const r = validateIdeaSubmission(rawIdea({ acceptanceHints: "x".repeat(IDEA_CONSTRAINT_MAX_CHARS + 1) as unknown as string[] }));
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.errors).toContain("acceptance_hints_invalid");
@@ -230,7 +244,7 @@ describe("scoreTaskGraph — graph verdict is the least-favorable across issues"
 });
 
 describe("buildClaimPlan — routes a scored task-graph into a loop claim plan (#4799)", () => {
-  const idea = validIdea({ id: "idea-C", targetRepo: "acme/widgets" });
+  const idea = validIdea({ id: "idea-C", targetRepo: { kind: "existing", repo: "acme/widgets" } });
 
   it("puts a lone go issue in claimable, carrying the target repo", () => {
     const plan = buildClaimPlan(buildTaskGraph(idea, [{ key: "issue-1", title: "Add widget", body: "new" }]), idea.targetRepo);
@@ -255,5 +269,13 @@ describe("buildClaimPlan — routes a scored task-graph into a loop claim plan (
     expect(plan.deferred[0]?.reasons).toContain("dependency_not_landed");
     expect(plan.skipped.map((s) => s.key)).toEqual(["issue-3"]);
     expect(plan.graphVerdict).toBe("avoid"); // least-favorable across the graph
+  });
+
+  it("carries an empty repo for a provision target (no repo exists until the driver creates it)", () => {
+    const provisionIdea = validIdea({ id: "idea-D", targetRepo: { kind: "provision" } });
+    const plan = buildClaimPlan(buildTaskGraph(provisionIdea, [{ key: "issue-1", title: "Add widget", body: "new" }]), provisionIdea.targetRepo);
+    expect(plan.targetRepo).toBe("");
+    expect(plan.claimable[0]?.targetRepo).toBe("");
+    expect(plan.claimable.map((s) => s.key)).toEqual(["issue-1"]);
   });
 });
