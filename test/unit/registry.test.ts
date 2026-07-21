@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getRepository, upsertRepositoryFromGitHub } from "../../src/db/repositories";
-import { getRepoPoolAssociation, normalizeRegistryPayload } from "../../src/registry/normalize";
+import { getRepoOrigin, getRepoPoolAssociation, normalizeRegistryPayload } from "../../src/registry/normalize";
 import { DEFAULT_ISSUE_DISCOVERY_SHARE } from "../../src/scoring/model";
 import { getLatestRegistrySnapshot, persistRegistrySnapshot, refreshRegistry } from "../../src/registry/sync";
 import { createCloudTestEnv, createTestEnv } from "../helpers/d1";
@@ -133,6 +133,48 @@ describe("registry normalization", () => {
     // A missing/undefined config (an unregistered repo) reads back as no association, never throws.
     expect(getRepoPoolAssociation(null)).toBeNull();
     expect(getRepoPoolAssociation(undefined)).toBeNull();
+  });
+
+  it("parses a repo's BYOR/APR provisioning origin and leaves pre-field repos with none (#7589)", () => {
+    const snapshot = normalizeRegistryPayload(
+      {
+        // A BYOR repo carries just the kind → a byor origin reads back intact.
+        "JSONbored/byor": { emission_share: 0.02, repo_origin: "byor" },
+        // An APR repo carries the kind plus a hosting org → a full apr origin reads back intact.
+        "JSONbored/apr": { emission_share: 0.02, repo_origin: "apr", hosting_org: "loopover-hosted" },
+        // A repo predating this field has no origin fields → no origin, byte-identical to today.
+        "JSONbored/pre-field": { emission_share: 0.01 },
+        // A partial APR (kind but no hosting org) is not a valid origin → null, not a half-populated object.
+        "JSONbored/apr-no-org": { emission_share: 0.01, repo_origin: "apr" },
+        // An unrecognized origin kind is dropped rather than guessed at.
+        "JSONbored/unknown": { emission_share: 0.01, repo_origin: "mystery" },
+      },
+      { kind: "raw-github", url: "https://example.test/master_repositories.json" },
+      "2026-05-22T00:00:00.000Z",
+    );
+    const byName = Object.fromEntries(snapshot.repositories.map((r) => [r.repo, r]));
+    expect(byName["JSONbored/byor"]!.repoOrigin).toEqual({ kind: "byor" });
+    expect(byName["JSONbored/apr"]!.repoOrigin).toEqual({ kind: "apr", hostingOrg: "loopover-hosted" });
+    expect(byName["JSONbored/pre-field"]!.repoOrigin ?? null).toBeNull();
+    expect(byName["JSONbored/apr-no-org"]!.repoOrigin ?? null).toBeNull();
+    expect(byName["JSONbored/unknown"]!.repoOrigin ?? null).toBeNull();
+  });
+
+  it("getRepoOrigin reads a repo's provisioning origin or null (#7589)", () => {
+    const snapshot = normalizeRegistryPayload(
+      {
+        "JSONbored/apr": { emission_share: 0.02, repo_origin: "apr", hosting_org: "loopover-hosted" },
+        "JSONbored/pre-field": { emission_share: 0.01 },
+      },
+      { kind: "raw-github", url: "https://example.test/master_repositories.json" },
+      "2026-05-22T00:00:00.000Z",
+    );
+    const byName = Object.fromEntries(snapshot.repositories.map((r) => [r.repo, r]));
+    expect(getRepoOrigin(byName["JSONbored/apr"])).toEqual({ kind: "apr", hostingOrg: "loopover-hosted" });
+    expect(getRepoOrigin(byName["JSONbored/pre-field"])).toBeNull();
+    // A missing/undefined config (an unregistered repo) reads back as no origin, never throws.
+    expect(getRepoOrigin(null)).toBeNull();
+    expect(getRepoOrigin(undefined)).toBeNull();
   });
 
   it("normalizes repository-list and array payload shapes defensively", () => {

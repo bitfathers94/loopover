@@ -449,6 +449,16 @@ export type RepoPoolAssociation = {
   subnetId: number;
 };
 
+/**
+ * Provisioning origin for a registered repo (#7589/#7590's BYOR+APR model). BYOR = the customer's own
+ * pre-existing repo; APR = loopover-provisioned under `hostingOrg`. Both variants are fully populated or the
+ * whole origin is dropped (see parseRepoOrigin) — a repo with no origin field carries none and round-trips
+ * byte-identical to today. Read it via `getRepoOrigin`.
+ */
+export type RepoOrigin =
+  | { kind: "byor" }
+  | { kind: "apr"; hostingOrg: string };
+
 export type RegistryRepoConfig = {
   repo: string;
   emissionShare: number;
@@ -463,6 +473,9 @@ export type RegistryRepoConfig = {
   timeDecay?: RepoTimeDecayOverrides | null;
   /** Subnet-funded pool association (#6099); null/absent = an organic repo with no funding pool (#6320). */
   poolAssociation?: RepoPoolAssociation | null;
+  /** Repo provisioning origin (#7589). null/absent = existing byte-identical behavior — do not assume "byor" by
+   *  default; absent means "not yet known/pre-dates this field", not "confirmed BYOR". */
+  repoOrigin?: RepoOrigin | null;
   raw: Record<string, JsonValue>;
 };
 

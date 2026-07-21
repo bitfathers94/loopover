@@ -1,5 +1,5 @@
 import { DEFAULT_ISSUE_DISCOVERY_SHARE } from "../scoring/model";
-import type { JsonValue, RegistryRepoConfig, RegistrySnapshot, RepoPoolAssociation, RepoTimeDecayOverrides } from "../types";
+import type { JsonValue, RegistryRepoConfig, RegistrySnapshot, RepoOrigin, RepoPoolAssociation, RepoTimeDecayOverrides } from "../types";
 
 type RawRepoConfig = Record<string, JsonValue>;
 
@@ -77,6 +77,7 @@ function normalizeRepo(repo: string, config: RawRepoConfig): RegistryRepoConfig 
     eligibilityMode: stringValue(config.eligibility_mode),
     timeDecay: parseTimeDecayOverrides(config.scoring),
     poolAssociation: parsePoolAssociation(config),
+    repoOrigin: parseRepoOrigin(config),
     raw: config,
   };
 }
@@ -96,6 +97,27 @@ function parsePoolAssociation(config: RawRepoConfig): RepoPoolAssociation | null
 // #6099's pool-state reporting UI consume — the single place downstream code asks "is this repo pool-funded?".
 export function getRepoPoolAssociation(config: RegistryRepoConfig | null | undefined): RepoPoolAssociation | null {
   return config?.poolAssociation ?? null;
+}
+
+// Repo provisioning origin (#7589/#7590), from the registry's flat `repo_origin` (`"byor"`/`"apr"`) plus, for
+// APR, a `hosting_org`. BYOR needs only the kind; APR needs a non-empty hosting org or the whole origin is
+// dropped (a half-populated APR is not a valid origin). Any other/absent `repo_origin` → null, so a repo that
+// pre-dates this field carries no origin and stays byte-identical to today.
+function parseRepoOrigin(config: RawRepoConfig): RepoOrigin | null {
+  const kind = stringValue(config.repo_origin);
+  if (kind === "byor") return { kind: "byor" };
+  if (kind === "apr") {
+    const hostingOrg = stringValue(config.hosting_org);
+    return hostingOrg === null ? null : { kind: "apr", hostingOrg };
+  }
+  return null;
+}
+
+// Read accessor for a repo's provisioning origin (#7589): returns the origin a repo was registered with, or
+// null for a repo that pre-dates this field / has no config. The single place downstream #7589/#7590 code asks
+// "was this repo BYOR or loopover-provisioned?" — mirrors getRepoPoolAssociation's null-safe read.
+export function getRepoOrigin(config: RegistryRepoConfig | null | undefined): RepoOrigin | null {
+  return config?.repoOrigin ?? null;
 }
 
 // Per-repo time-decay overrides (#703), from the registry's nested `scoring.time_decay` (the same source
