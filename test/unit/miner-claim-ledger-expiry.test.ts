@@ -75,12 +75,22 @@ describe("loopover-miner claim ledger expiry (#2316)", () => {
     expect(findExpiredClaims([fresh, stale, released], nowMs, maxAgeMs)).toEqual([stale]);
   });
 
-  it("findExpiredClaims skips an active claim whose claimedAt is unparseable (NaN age path)", () => {
+  it("findExpiredClaims sweeps an active claim whose claimedAt is unparseable (fail-closed NaN age path, #7732)", () => {
     const nowMs = Date.parse("2026-07-03T00:00:00.000Z");
     const maxAgeMs = 1 * 24 * 60 * 60 * 1000;
     const bogus = claim({ issueNumber: 7, claimedAt: "not-a-date" }); // Date.parse -> NaN -> claimAgeMs null
     const stale = claim({ issueNumber: 8, claimedAt: "2026-06-01T00:00:00.000Z" });
-    expect(findExpiredClaims([bogus, stale], nowMs, maxAgeMs)).toEqual([stale]);
+    // A corrupted/hand-edited row with an unparseable claimedAt has an indeterminate age; rather than being
+    // permanently un-expirable it is swept alongside the genuinely stale row.
+    expect(findExpiredClaims([bogus, stale], nowMs, maxAgeMs)).toEqual([bogus, stale]);
+  });
+
+  it("findExpiredClaims retains a fresh active claim while sweeping an unparseable sibling (#7732)", () => {
+    const nowMs = Date.parse("2026-07-03T00:00:00.000Z");
+    const maxAgeMs = 7 * 24 * 60 * 60 * 1000;
+    const fresh = claim({ issueNumber: 1, claimedAt: "2026-07-02T00:00:00.000Z" }); // within window, kept
+    const bogus = claim({ issueNumber: 2, claimedAt: "" }); // Date.parse("") -> NaN -> claimAgeMs null, swept
+    expect(findExpiredClaims([fresh, bogus], nowMs, maxAgeMs)).toEqual([bogus]);
   });
 
   it("sweepExpiredClaims defaults maxAgeMs and skips rows whose store.expireClaim reports no transition (null)", () => {
