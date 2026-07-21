@@ -3,6 +3,7 @@ import { buildAiReviewDiff, claimAiReviewLock, runAiReviewForAdvisory, shouldSta
 import { resolveAiReviewableAuthor } from "../../src/queue/ai-review-orchestration";
 import { BEST_REVIEW_MODELS, INCOHERENT_DIFF_ASSESSMENT } from "../../src/services/ai-review";
 import * as sentryModule from "../../src/selfhost/sentry";
+import * as repositoriesModule from "../../src/db/repositories";
 import { upsertRepositoryAiKey } from "../../src/db/repositories";
 import type { Advisory, PullRequestFileRecord, RepositorySettings } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
@@ -484,6 +485,34 @@ describe("runAiReviewForAdvisory", () => {
     expect(adv.findings.map((f) => f.code)).toEqual(["ai_review_inconclusive"]);
     expect(captureSpy).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ reason: "ai_review_inconclusive", repo: "acme/widgets", head_sha: "sha3" }), "ai_review_inconclusive");
     captureSpy.mockRestore();
+  });
+
+  it("logs the ai_review_failed structured line at level \"error\" (console.error sink → Sentry error, not warning)", async () => {
+    // The outer catch is a genuine review crash: it uses the console.error sink, so forwardStructuredLogToSentry
+    // must classify it as an ERROR. An explicit level in the payload wins over the sink default (#7806), so the
+    // payload's own level has to say "error" — a "warn" here would silently downgrade the alert to a warning.
+    const readFilesSpy = vi
+      .spyOn(repositoriesModule, "listPullRequestFiles")
+      .mockRejectedValueOnce(new Error("D1 read error"));
+    const captureSpy = vi.spyOn(sentryModule, "captureReviewFailure").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const result = await runAiReviewForAdvisory(aiEnv(async () => ({ response: notesOnlyJson() })), {
+      mode: "live",
+      settings: { aiReviewMode: "block" } as RepositorySettings,
+      advisory: advisory(),
+      repoFullName: "acme/widgets",
+      pr,
+      author: "alice",
+      confirmedContributor: true,
+    });
+    expect(result).toBeUndefined(); // a crashed review returns undefined so the caller holds the PR
+    expect(captureSpy).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ kind: "review" }), "ai_review_failed");
+    const logged = errorSpy.mock.calls.map((call) => JSON.parse(String(call[0])) as { level?: string; event?: string });
+    const failure = logged.find((entry) => entry.event === "ai_review_failed");
+    expect(failure?.level).toBe("error");
+    errorSpy.mockRestore();
+    captureSpy.mockRestore();
+    readFilesSpy.mockRestore();
   });
 
   it("appends an ai_review_split finding (lone-blocker HOLD) when the two block-mode reviewers disagree", async () => {
