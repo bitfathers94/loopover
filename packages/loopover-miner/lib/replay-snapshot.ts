@@ -75,9 +75,17 @@ function normalizeRepoFullName(repoFullName: string): string {
   return `${owner}/${repo}`;
 }
 
+// A commit SHA is used verbatim as a path segment in planReplaySnapshotPath (join(repoPath, SUBDIR, commitSha)),
+// so an unvalidated value like "../../../../tmp/evil" would traverse straight out of the snapshot directory. Pin it
+// to the same hex-SHA shape replay-task-generation.ts already enforces (#7796) -- 7-40 hex chars -- and fold to
+// lowercase so a differently-cased spelling of the same commit resolves to one canonical path (and one cache row).
+const COMMIT_SHA_PATTERN = /^[0-9a-f]{7,40}$/i;
+
 function normalizeCommitSha(commitSha: string): string {
   if (typeof commitSha !== "string" || !commitSha.trim()) throw new Error("invalid_commit_sha");
-  return commitSha.trim();
+  const trimmed = commitSha.trim();
+  if (!COMMIT_SHA_PATTERN.test(trimmed)) throw new Error("invalid_commit_sha");
+  return trimmed.toLowerCase();
 }
 
 /** Worktree exports live under this dir inside the repo, mirroring worktree-allocator.ts's WORKTREE_SUBDIR. */
