@@ -1000,6 +1000,12 @@ const STDIO_TOOL_DESCRIPTORS = [
       "Return a repo's own persisted focus manifest (.loopover.yml policy) plus its compiled policy. Read-only; maintainer/owner/operator authenticated. Distinct from loopover_validate_config (ad-hoc string validation).",
   },
   {
+    name: "loopover_get_repo_onboarding_pack",
+    category: "maintainer",
+    description:
+      "Preview-only onboarding pack for a repository owner (contribution lanes, label policy, and public-safe guidance). Not published to GitHub. Maintainer/owner/operator authenticated; advisory only.",
+  },
+  {
     name: "loopover_get_activation_preview",
     category: "maintainer",
     description: "Return the repo's maintainer activation preview: a deterministic run of the advisory engine over recent PRs (evaluated/with-findings counts, distinct finding codes, per-PR samples, current review-check mode, and the single recommended next action). Maintainer-authenticated; advisory only.",
@@ -1605,6 +1611,24 @@ registerStdioTool(
   async ({ owner, repo }: any) => {
     const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
     return toolResult("LoopOver focus manifest.", await apiGet(`${prefix}/focus-manifest`));
+  },
+);
+
+// (#7756) CLI stdio mirror of the remote loopover_get_repo_onboarding_pack — thin GET proxy of the same
+// maintainer-scoped /v1/repos/:owner/:repo/onboarding-pack/preview route the `maintain onboarding-pack`
+// CLI command (#6738) already calls (same ownerRepoShape + apiGet pattern as focus_manifest). No human CLI verb.
+registerStdioTool(
+  "loopover_get_repo_onboarding_pack",
+  {
+    description: stdioToolDescription("loopover_get_repo_onboarding_pack"),
+    inputSchema: ownerRepoShape,
+  },
+  async ({ owner, repo }: any) => {
+    const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    return toolResult(
+      `LoopOver onboarding pack preview for ${owner}/${repo} (preview-only, not published).`,
+      await apiGet(`${prefix}/onboarding-pack/preview`),
+    );
   },
 );
 
