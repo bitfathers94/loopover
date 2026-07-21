@@ -943,6 +943,17 @@ const gatePrecisionShape = {
   windowDays: z.number().int().positive().optional(),
 };
 
+// #7757: mirrors the remote loopover_get_agent_audit_feed tool's input (src/mcp/server.ts's auditFeedShape) --
+// owner/repo plus the same optional `since` (ISO-8601 with offset) and `limit` (1..200) the `maintain
+// audit-feed` CLI forwards to GET /v1/repos/:owner/:repo/agent/audit-feed. No `pull`: the remote tool omits
+// it, and the shape mirrors that surface.
+const auditFeedShape = {
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  since: z.string().datetime({ offset: true }).optional(),
+  limit: z.number().int().positive().max(200).optional(),
+};
+
 // #7764: mirrors the remote loopover_plan_repo_issues tool's input (src/mcp/server.ts's planRepoIssuesShape),
 // minus the create-only `milestone` which this proxy (and the `maintain plan-issues` CLI) does not expose --
 // forwarded to POST /v1/repos/:owner/:repo/issue-plan-drafts/generate. `goal` is the required maintainer
@@ -1384,6 +1395,11 @@ const STDIO_TOOL_DESCRIPTORS = [
     name: "loopover_get_gate_precision",
     category: "maintainer",
     description: "Return per-gate-type false-positive precision for a repo's recorded gate blocks — blocked / blocked-then-merged counts and false-positive rates with low-sample guards. Optionally bounded by windowDays. Maintainer-authenticated; measurement only.",
+  },
+  {
+    name: "loopover_get_agent_audit_feed",
+    category: "agent",
+    description: "Return a repo's agent audit feed: executed actions (agent.action.*) and approval-queue decisions (accepted/rejected), newest first. Optionally bounded by `since` (ISO-8601) and `limit` (1..200). Read-only and public-safe (action posture only). Maintainer access required.",
   },
   {
     name: "loopover_plan_repo_issues",
@@ -2810,6 +2826,25 @@ registerStdioTool(
     return toolResult(`Gate precision for ${owner}/${repo}.`, payload);
   },
   );
+
+registerStdioTool(
+  "loopover_get_agent_audit_feed",
+  {
+    description: stdioToolDescription("loopover_get_agent_audit_feed"),
+    inputSchema: auditFeedShape,
+  },
+  async ({ owner, repo, since, limit }: any) => {
+    // #7757: read-only mirror of GET {repoBase}/agent/audit-feed -- the same surface the remote
+    // loopover_get_agent_audit_feed tool and the `maintain audit-feed` CLI already call. The route enforces
+    // maintainer authorization and validates every query param, so omitted flags are omitted from the query
+    // entirely and the route applies its own defaults.
+    const query = new URLSearchParams();
+    if (since !== undefined) query.set("since", String(since));
+    if (limit !== undefined) query.set("limit", String(limit));
+    const payload = await apiGet(`${toolRepoBase(owner, repo)}/agent/audit-feed${query.size > 0 ? `?${query}` : ""}`);
+    return toolResult(`Agent audit feed for ${owner}/${repo}.`, payload);
+  },
+);
 
 registerStdioTool(
   "loopover_plan_repo_issues",
