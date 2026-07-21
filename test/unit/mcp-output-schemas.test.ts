@@ -13,6 +13,7 @@ import { createTestEnv } from "../helpers/d1";
 const TOOLS_WITH_OUTPUT_SCHEMA = [
   "loopover_get_repo_context",
   "loopover_get_maintainer_noise",
+  "loopover_get_repo_focus_manifest",
   "loopover_get_label_audit",
   "loopover_get_maintainer_lane",
   "loopover_get_repo_onboarding_pack",

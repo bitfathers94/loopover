@@ -166,7 +166,7 @@ import { buildFocusManifestValidation } from "../services/focus-manifest-validat
 import { isGlobalAgentPause, resolveAgentActionMode, resolveAgentPermissionReadiness } from "../settings/agent-execution";
 import { AGENT_ACTION_CLASSES, AUTONOMY_LEVELS, isActingAutonomyLevel, resolveAutonomy } from "../settings/autonomy";
 import { resolveRepositorySettings } from "../settings/repository-settings";
-import { MAX_FOCUS_MANIFEST_BYTES } from "../signals/focus-manifest";
+import { compileFocusManifestPolicy, MAX_FOCUS_MANIFEST_BYTES } from "../signals/focus-manifest";
 import { loadPublicRepoFocusManifest, loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildPredictedGateVerdict, buildGateDispositions, type PredictedGateVerdict } from "../rules/predicted-gate";
 export { buildGateDispositions, type GateDisposition } from "../rules/predicted-gate";
@@ -892,6 +892,12 @@ const maintainerNoiseOutputSchema = {
   maintainerActions: z.array(z.string()).optional(),
   queueHealth: z.unknown().optional(),
   summary: z.string().optional(),
+};
+
+const repoFocusManifestOutputSchema = {
+  repoFullName: z.string().optional(),
+  manifest: z.unknown().optional(),
+  policy: z.unknown().optional(),
 };
 
 const labelAuditOutputSchema = {
@@ -1798,6 +1804,7 @@ export const MCP_TOOL_CATEGORY_IDS: readonly McpToolCategory[] = ["discovery", "
 export const MCP_TOOL_CATEGORIES: Record<string, McpToolCategory> = {
   loopover_get_repo_context: "maintainer",
   loopover_get_maintainer_noise: "maintainer",
+  loopover_get_repo_focus_manifest: "maintainer",
   loopover_get_label_audit: "maintainer",
   loopover_get_maintainer_lane: "maintainer",
   loopover_get_repo_onboarding_pack: "maintainer",
@@ -1927,6 +1934,16 @@ export class LoopoverMcp {
         outputSchema: maintainerNoiseOutputSchema,
       },
       async (input) => this.toolResult(await this.getMaintainerNoise(input)),
+    );
+
+    register(
+      "loopover_get_repo_focus_manifest",
+      {
+        description: "Return a repo's own persisted focus manifest plus its compiled policy (the stored per-repo contribution manifest, not an ad-hoc string to validate). Maintainer/owner/operator-authenticated; read-only.",
+        inputSchema: ownerRepoShape,
+        outputSchema: repoFocusManifestOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getRepoFocusManifest(input)),
     );
 
     register(
@@ -2997,6 +3014,27 @@ export class LoopoverMcp {
     await this.requireRepoAccess(repoFullName);
   }
 
+  // GET /v1/repos/:owner/:repo/focus-manifest is requireAppRole(["maintainer","owner","operator"])-gated plus a
+  // session-repo-access check — replicate that exact boundary here, NOT the plain requireRepoAccess read gate:
+  // the route requires the caller HOLD a maintainer/owner/operator role, not merely be able to see the repo. The
+  // shared static `mcp` CLI token is denied outright (mirroring requireAppRole's insufficient_role for the static
+  // mcp identity — the MCP_READ_REPO_ALLOWLIST wildcard does NOT unlock an app-role gate); operator-only api/internal
+  // static identities stay trusted, exactly as requireAppRole returns null for them. (#7808)
+  private async requireRepoFocusManifestAccess(repoFullName: string): Promise<void> {
+    if (this.identity.kind === "static" && this.identity.actor === "mcp") {
+      throw new Error("Forbidden: the shared MCP token cannot read a repo's stored focus manifest; a maintainer, owner, or operator session is required.");
+    }
+    if (this.identity.kind === "session") {
+      const summary = await loadControlPanelRoleSummary(this.env, this.identity.actor);
+      if (!summary.roles.some((role) => role === "maintainer" || role === "owner" || role === "operator")) {
+        throw new Error("Forbidden: maintainer, owner, or operator role is required to read this repo's focus manifest.");
+      }
+      if (!(await this.canAccessRepo(repoFullName))) {
+        throw new Error("Forbidden: session cannot access this repository's focus manifest.");
+      }
+    }
+  }
+
   // Stricter than requireRepoAccess (read): a maintainer-MANAGE gate for write actions (#784 propose-action).
   // A session must own/maintain the repo (or be an operator); api/internal static identities are trusted (they
   // are operator-only Worker secrets, never handed to end users). The static `mcp` identity is NOT trusted here:
@@ -3111,6 +3149,19 @@ export class LoopoverMcp {
     return {
       summary: maintainerNoiseSummary(report),
       data: report as unknown as Record<string, unknown>,
+    };
+  }
+
+  // #7808 — read-only mirror of GET /v1/repos/:owner/:repo/focus-manifest. Loads the repo's OWN stored manifest
+  // and its compiled policy exactly as the route does, returning the identical { repoFullName, manifest, policy }
+  // shape. Distinct from loopover_validate_config, which validates an ad-hoc caller-supplied manifest string.
+  private async getRepoFocusManifest(input: { owner: string; repo: string }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    await this.requireRepoFocusManifestAccess(fullName);
+    const manifest = await loadRepoFocusManifest(this.env, fullName);
+    return {
+      summary: `LoopOver stored focus manifest and compiled policy for ${fullName}.`,
+      data: { repoFullName: fullName, manifest, policy: compileFocusManifestPolicy(manifest) } as unknown as Record<string, unknown>,
     };
   }
 

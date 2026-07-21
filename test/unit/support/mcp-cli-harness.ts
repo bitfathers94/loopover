@@ -540,6 +540,23 @@ export async function startFixtureServer(
       );
       return;
     }
+    if (request.url === "/v1/repos/owner/repo/focus-manifest" && request.method === "GET") {
+      response.end(
+        JSON.stringify({
+          repoFullName: "owner/repo",
+          manifest: {
+            wantedPaths: ["src/"],
+            linkedIssuePolicy: "required",
+            testExpectations: ["Run npm run test:ci."],
+          },
+          policy: {
+            linkedIssuePolicy: { mode: "required" },
+            contributionLane: { default: "fix" },
+          },
+        }),
+      );
+      return;
+    }
     if (request.url === "/v1/repos/owner/repo/outcome-patterns" && request.method === "GET") {
       response.end(
         JSON.stringify({

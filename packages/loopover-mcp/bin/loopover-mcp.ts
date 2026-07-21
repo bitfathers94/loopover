@@ -940,6 +940,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     description: "Return the maintainer queue-noise triage report for a repo: a noise score/level, the specific noise sources to clear first, and recommended maintainer actions. Maintainer-authenticated; advisory only.",
   },
   {
+    name: "loopover_get_repo_focus_manifest",
+    category: "maintainer",
+    description:
+      "Return a repo's own persisted focus manifest plus its compiled policy from the private LoopOver API (the stored per-repo contribution manifest, not an ad-hoc string to validate). Maintainer/owner/operator-authenticated; read-only.",
+  },
+  {
     name: "loopover_preflight_pr",
     category: "discovery",
     description: "Preflight planned PR metadata against lane, duplicate, linked issue, test, and queue signals.",
@@ -1464,6 +1470,18 @@ registerStdioTool(
   async ({ owner, repo }: any) => {
     const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
     return toolResult("LoopOver maintainer noise report.", await apiGet(`${prefix}/maintainer-noise`));
+  },
+);
+
+registerStdioTool(
+  "loopover_get_repo_focus_manifest",
+  {
+    description: stdioToolDescription("loopover_get_repo_focus_manifest"),
+    inputSchema: ownerRepoShape,
+  },
+  async ({ owner, repo }: any) => {
+    const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    return toolResult("LoopOver stored focus manifest and compiled policy.", await apiGet(`${prefix}/focus-manifest`));
   },
 );
 
