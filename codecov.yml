@@ -20,11 +20,12 @@ codecov:
     # 3 coverage uploads (JUnit test_results uploads are a separate stream and don't count here) before
     # posting a status removes that premature-fail/premature-pass window entirely.
     #
-    # Stays 3, not 4, even though review-enrichment adds a `rees` upload on REES PRs: 3 is the count that
-    # ALWAYS lands whenever validate-tests runs (the minimum floor), while the `rees` upload only exists on
-    # REES PRs. The `rees` report is produced by validate-code, which finishes its REES steps in seconds and
-    # so uploads well before any ~10-minute shard -- it is already merged in by the time the 3rd shard trips
-    # this threshold, so no premature window opens for the review-enrichment diff either.
+    # Stays 3 even though review-enrichment adds a `rees` upload and control-plane adds a `control-plane`
+    # upload on their respective PRs: 3 is the count that ALWAYS lands whenever validate-tests runs (the
+    # minimum floor), while those extra uploads only exist on their own PRs. Both are produced by validate-code,
+    # which finishes its REES/control-plane steps in seconds and so uploads well before any ~10-minute shard --
+    # each is already merged in by the time the 3rd shard trips this threshold, so no premature window opens
+    # for the review-enrichment or control-plane diff either.
     after_n_builds: 3
 
 coverage:
@@ -51,6 +52,15 @@ flags:
     paths:
       - review-enrichment/
     carryforward: true
+  # control-plane ships its coverage under its own flag the same way rees does (produced + uploaded by
+  # validate-code, ci.yml), for the same reason: its node:test suite runs against the built dist/ and is
+  # invisible to vitest, so without a scoped flag a control-plane/** change would get a vacuous patch check.
+  # Scoping to control-plane/ keeps its project trend honest; carryforward keeps that trend stable on PRs
+  # that don't re-run its suite. Patch gating is unaffected by carryforward -- patch is the PR's own diff.
+  control-plane:
+    paths:
+      - control-plane/
+    carryforward: true
 
 comment:
   layout: "condensed_header, diff, flags, files"
@@ -58,9 +68,9 @@ comment:
 
 # Coverage is collected by vitest (v8) over src/**, packages/loopover-engine/src/**,
 # packages/loopover-miner/{lib,bin}/**, packages/loopover-mcp/{lib,bin}/**, and
-# packages/discovery-index/src/** (plus review-enrichment/src/** via the standalone `rees` flag, c8 over
-# its built dist remapped through source maps); mirror vitest's exclusions here so the Codecov total
-# matches the local report.
+# packages/discovery-index/src/** (plus review-enrichment/src/** via the standalone `rees` flag and
+# control-plane/src/** via the standalone `control-plane` flag, both c8 over their built dist remapped
+# through source maps); mirror vitest's exclusions here so the Codecov total matches the local report.
 ignore:
   - "src/env.d.ts"
   - "apps/**"

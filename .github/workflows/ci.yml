@@ -43,6 +43,7 @@ jobs:
       miner: ${{ steps.filter.outputs.miner }}
       minerTestHarness: ${{ steps.filter.outputs.minerTestHarness }}
       rees: ${{ steps.filter.outputs.rees }}
+      controlPlane: ${{ steps.filter.outputs.controlPlane }}
       observability: ${{ steps.filter.outputs.observability }}
     steps:
       # Debounce rapid re-pushes to an open PR: every job below (validate-code, all 3 validate-tests
@@ -211,6 +212,9 @@ jobs:
             rees:
               - 'review-enrichment/**'
               - '.github/workflows/ci.yml'
+            controlPlane:
+              - 'control-plane/**'
+              - '.github/workflows/ci.yml'
             # Both miner-package test files are self-contained w.r.t. root src/**, the same trust boundary as
             # mcpCliHarness above: check-miner-package.test.ts only spawns scripts/check-miner-package.mjs as a
             # real subprocess (node:child_process + vitest, nothing else), and miner-calibration-types.test.ts
@@ -242,7 +246,7 @@ jobs:
     needs: changes
     # draft != true also gates push runs correctly: github.event.pull_request is unset there, so the
     # property access evaluates to null, and null != true is true.
-    if: ${{ github.event_name == 'push' || (github.event.pull_request.draft != true && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.discoveryIndex == 'true' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.rees == 'true' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.observability == 'true')) }}
+    if: ${{ github.event_name == 'push' || (github.event.pull_request.draft != true && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.discoveryIndex == 'true' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.rees == 'true' || needs.changes.outputs.controlPlane == 'true' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.observability == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -631,6 +635,68 @@ jobs:
           override_commit: ${{ github.event.pull_request.head.sha }}
           override_pr: ${{ github.event.pull_request.number }}
           fail_ci_if_error: true
+      # control-plane is not an npm workspace member (its own package-lock.json), so it needs its own
+      # cache entry -- same restore/save-after-success pattern and fork/trusted key split as REES above.
+      - name: Restore control-plane node_modules cache
+        id: control-plane-node-modules-cache
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.controlPlane == 'true' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: control-plane/node_modules
+          key: npm-control-plane-${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && 'fork' || 'trusted' }}-${{ hashFiles('.nvmrc') }}-${{ hashFiles('control-plane/package.json', 'control-plane/package-lock.json') }}
+      - name: control-plane install
+        if: ${{ (github.event_name == 'push' || needs.changes.outputs.controlPlane == 'true') && steps.control-plane-node-modules-cache.outputs.cache-hit != 'true' }}
+        run: npm run control-plane:install
+      - name: Save control-plane node_modules cache
+        if: ${{ (github.event_name == 'push' || needs.changes.outputs.controlPlane == 'true') && steps.control-plane-node-modules-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: control-plane/node_modules
+          key: ${{ steps.control-plane-node-modules-cache.outputs.cache-primary-key }}
+      - name: control-plane build and tests
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.controlPlane == 'true' }}
+        run: npm --prefix control-plane test
+      # control-plane's node:test suite runs against the built dist/, so its real coverage is invisible to
+      # Codecov (vitest never sees it). `npm run control-plane:coverage` re-runs that suite under c8 and remaps
+      # the dist hits back to control-plane/src/** through the build's source maps, producing an lcov Codecov
+      # can gate. The authoritative pass/fail stays the uninstrumented step above; the verify step below fails
+      # CI if no report lands.
+      - name: control-plane coverage
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.controlPlane == 'true' }}
+        run: npm run control-plane:coverage || true
+      - name: Verify control-plane coverage report exists
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.controlPlane == 'true' }}
+        run: |
+          if [ ! -s control-plane/coverage/lcov.info ]; then
+            echo "::error title=control-plane coverage::control-plane/coverage/lcov.info is missing or empty"
+            exit 1
+          fi
+      # Separate `control-plane` flag so codecov/patch actually gates control-plane/** changes -- otherwise a
+      # control-plane-only PR gets a vacuous patch check. Same trusted vs. fork-tokenless split and override_*
+      # handling as the REES uploads above.
+      - name: Upload control-plane coverage to Codecov
+        if: ${{ (github.event_name == 'push' || needs.changes.outputs.controlPlane == 'true') && github.event.pull_request.head.repo.fork != true }}
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./control-plane/coverage/lcov.info
+          flags: control-plane
+          disable_search: true
+          override_branch: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref_name }}
+          override_commit: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          override_pr: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || '' }}
+          fail_ci_if_error: true
+      - name: Upload control-plane coverage to Codecov (fork PR tokenless)
+        if: ${{ (github.event_name == 'push' || needs.changes.outputs.controlPlane == 'true') && github.event.pull_request.head.repo.fork == true }}
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: ./control-plane/coverage/lcov.info
+          flags: control-plane
+          disable_search: true
+          override_branch: ${{ github.event.pull_request.head.repo.owner.login }}:${{ github.event.pull_request.head.ref }}
+          override_commit: ${{ github.event.pull_request.head.sha }}
+          override_pr: ${{ github.event.pull_request.number }}
+          fail_ci_if_error: true
       - name: OpenAPI drift check
         if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.uiContract == 'true' }}
         run: npm run ui:openapi:check
@@ -773,11 +839,12 @@ jobs:
     # all, and the required `validate` aggregate treats a skipped job as success (#7318-#7321: 3
     # packages/loopover-miner/lib-only PRs merged this way with validate-tests never running). Running the
     # shards guarantees the 3 uploads so Codecov posts a real patch verdict covering whichever package
-    # actually changed (review-enrichment/** via the `rees` flag from validate-code; packages/loopover-mcp,
-    # packages/loopover-engine, packages/loopover-miner, and packages/discovery-index via their entries in
-    # vitest.config.ts's coverage.include, exercised by the root test/** suite these shards already run).
+    # actually changed (review-enrichment/** via the `rees` flag and control-plane/** via the `control-plane`
+    # flag, both from validate-code; packages/loopover-mcp, packages/loopover-engine, packages/loopover-miner,
+    # and packages/discovery-index via their entries in vitest.config.ts's coverage.include, exercised by the
+    # root test/** suite these shards already run).
     # Draft PRs still skip the whole fan-out (#6448), so these triggers only apply to ready PRs.
-    if: ${{ github.event_name == 'push' || (github.event.pull_request.draft != true && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.rees == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.discoveryIndex == 'true')) }}
+    if: ${{ github.event_name == 'push' || (github.event.pull_request.draft != true && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.rees == 'true' || needs.changes.outputs.controlPlane == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.discoveryIndex == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -1042,9 +1109,9 @@ jobs:
   validate-tests-merge:
     name: validate-tests-merge
     needs: [changes, validate-tests]
-    # Same trigger as validate-tests: whenever shards ran (REES/mcp/engine/miner/discoveryIndex-only PRs
-    # included), merge their reports too.
-    if: ${{ github.event_name == 'push' || (github.event.pull_request.draft != true && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.rees == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.discoveryIndex == 'true')) }}
+    # Same trigger as validate-tests: whenever shards ran (REES/control-plane/mcp/engine/miner/discoveryIndex-only
+    # PRs included), merge their reports too.
+    if: ${{ github.event_name == 'push' || (github.event.pull_request.draft != true && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.rees == 'true' || needs.changes.outputs.controlPlane == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.discoveryIndex == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
