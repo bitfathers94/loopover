@@ -1195,6 +1195,11 @@ const STDIO_TOOL_DESCRIPTORS = [
     description: "Return the private decision pack for a contributor: the ranked repos and issues to work on next, with per-repo go/raise/avoid guidance. Takes login (the contributor's GitHub username).",
   },
   {
+    name: "loopover_get_contributor_profile",
+    category: "discovery",
+    description: "Return an evidence-backed LoopOver contributor profile for a GitHub login: standing, strengths, and public-safe guidance drawn from that contributor's history. Takes login (the contributor's GitHub username).",
+  },
+  {
     name: "loopover_explain_repo_decision",
     category: "discovery",
     description: "Return the go/raise/avoid decision for one specific contributor-and-repo pair, drawn from that contributor's decision pack — narrower than loopover_get_decision_pack, which returns the whole pack. Takes login (GitHub username), owner, and repo.",
@@ -2183,6 +2188,18 @@ registerStdioTool(
   async ({ login }: any) => {
     const payload = await getDecisionPackWithCache(login);
     return toolResult(decisionPackToolSummary(login, payload), payload);
+  },
+);
+
+registerStdioTool(
+  "loopover_get_contributor_profile",
+  {
+    description: stdioToolDescription("loopover_get_contributor_profile"),
+    inputSchema: loginShape,
+  },
+  async ({ login }: any) => {
+    const payload = await getContributorProfile(login);
+    return toolResult(`LoopOver contributor profile for ${login}.`, payload);
   },
 );
 
@@ -4056,11 +4073,11 @@ function printContributorProfileHelp() {
 // from --login / the active session / LOOPOVER_LOGIN / GITHUB_LOGIN, exactly like the sibling contributor
 // commands, so an already-logged-in contributor never retypes their own login. Named `contributor-profile`
 // because the top-level `profile` command already manages MCP client profiles.
-async function contributorProfileCli(options: any) {
+export async function contributorProfileCli(options: any) {
   if (options.help === true) return printContributorProfileHelp();
   const login = options.login ?? activeProfile.session?.login ?? process.env.LOOPOVER_LOGIN ?? process.env.GITHUB_LOGIN;
   if (!login) throw new Error("Pass --login <github-login>, log in with `loopover-mcp login`, or set LOOPOVER_LOGIN.");
-  const payload = await apiGet(`/v1/contributors/${encodeURIComponent(login)}/profile`);
+  const payload = await getContributorProfile(login);
   if (options.json) {
     process.stdout.write(`${JSON.stringify(payload, null, 2)}
 `);
@@ -5961,6 +5978,10 @@ function decisionPackToolSummary(login: any, payload: any) {
 function repoDecisionToolSummary(login: any, repoFullName: any, payload: any) {
   if (payload?.source === "local_cache") return `LoopOver repo decision for ${login} in ${repoFullName} (stale local cache).`;
   return `LoopOver repo decision for ${login} in ${repoFullName}.`;
+}
+
+function getContributorProfile(login: any) {
+  return apiGet(`/v1/contributors/${encodeURIComponent(login)}/profile`);
 }
 
 function getOpenPrMonitor(login: any) {
