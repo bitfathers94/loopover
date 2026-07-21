@@ -115,6 +115,7 @@ import { loadMaintainerLaneReport, maintainerLaneSummary } from "../services/mai
 import { buildRepoOnboardingPackPreviewForRepo } from "../services/repo-onboarding-pack";
 import { buildRegistrationReadinessResponse, buildGittensorConfigRecommendationResponse } from "../api/routes";
 import { loadGatePrecisionReport } from "../services/gate-precision";
+import { listOverrideAudit, type StorageEnv } from "../review/auto-apply";
 import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
 import {
   applyMcpPlanningChoices,
@@ -216,6 +217,14 @@ const ownerRepoWindowShape = {
   owner: z.string().min(1),
   repo: z.string().min(1),
   windowDays: z.number().int().positive().optional(),
+};
+
+// #7798 - self-tune override audit trail input: owner/repo + optional limit, mirroring the REST route's
+// ?limit query param (a non-positive/absent value falls through to listOverrideAudit's own default).
+const selftuneOverrideAuditShape = {
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  limit: z.number().int().positive().optional(),
 };
 
 const windowOnlyShape = {
@@ -991,6 +1000,14 @@ const gatePrecisionOutputSchema = {
   perGateType: z.array(z.unknown()).optional(),
   overall: z.unknown().optional(),
   signals: z.array(z.string()).optional(),
+};
+
+// #7798 - self-tune override audit trail surfaced over MCP, mirroring the gate-precision two-surface pattern.
+// listOverrideAudit is the single source of truth for the row shape (event type, nullable detail JSON, and
+// createdAt); the array is optional so an empty/error trail still validates.
+const selftuneOverrideAuditOutputSchema = {
+  repoFullName: z.string().optional(),
+  audit: z.array(z.object({ eventType: z.string(), detail: z.string().nullable(), createdAt: z.string() })).optional(),
 };
 
 // #5825 - maintainer-authenticated skipped-PR audit trail, mirroring GET /v1/app/skipped-pr-audit's
@@ -1807,6 +1824,7 @@ export const MCP_TOOL_CATEGORIES: Record<string, McpToolCategory> = {
   loopover_get_repo_outcome_patterns: "maintainer",
   loopover_get_outcome_calibration: "maintainer",
   loopover_get_gate_precision: "maintainer",
+  loopover_get_selftune_override_audit: "maintainer",
   loopover_get_skipped_pr_audit: "maintainer",
   loopover_get_fleet_analytics: "maintainer",
   loopover_get_recommendation_quality: "maintainer",
@@ -2022,6 +2040,17 @@ export class LoopoverMcp {
         outputSchema: gatePrecisionOutputSchema,
       },
       async (input) => this.toolResult(await this.getGatePrecision(input)),
+    );
+
+    register(
+      "loopover_get_selftune_override_audit",
+      {
+        description:
+          "Return the self-tune override audit trail for a repo: why the LOOPOVER_REVIEW_SELFTUNE loop promoted a live override — each event's type, detail, and timestamp, newest first. Optionally cap with limit. Maintainer-authenticated; read-only measurement.",
+        inputSchema: selftuneOverrideAuditShape,
+        outputSchema: selftuneOverrideAuditOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getSelftuneOverrideAudit(input)),
     );
 
     register(
@@ -3484,6 +3513,21 @@ export class LoopoverMcp {
     return {
       summary: `LoopOver gate precision for ${fullName}: ${report.overall.blocked} gate blocks, overall false-positive rate ${report.overall.falsePositiveRate ?? "n/a (below sample threshold)"}.`,
       data: report as unknown as Record<string, unknown>,
+    };
+  }
+
+  // #7798 - surface the existing self-tune override audit trail over MCP, mirroring getGatePrecision: same
+  // per-repo read gate (requireRepoAccess), same measurement-only intent. listOverrideAudit is already scoped
+  // to the single repo (project = owner/repo), so nothing cross-repo is revealed. An omitted limit is passed
+  // through as undefined so listOverrideAudit's own default applies -- matching the REST route, which sends
+  // undefined when ?limit is absent or non-positive.
+  private async getSelftuneOverrideAudit(input: { owner: string; repo: string; limit?: number | undefined }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    await this.requireRepoAccess(fullName);
+    const audit = await listOverrideAudit(this.env as unknown as StorageEnv, fullName, input.limit);
+    return {
+      summary: `LoopOver self-tune override audit for ${fullName}: ${audit.length} event(s).`,
+      data: { repoFullName: fullName, audit } as unknown as Record<string, unknown>,
     };
   }
 

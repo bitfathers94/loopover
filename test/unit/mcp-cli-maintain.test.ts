@@ -95,6 +95,26 @@ describe("loopover-mcp CLI — maintain (#784)", () => {
     expect(scoped).toMatch(/Gate precision for owner\/repo \(last 30d\)/);
   });
 
+  it("selftune-audit reports the self-tune override audit trail (plain + json), passing --limit through", async () => {
+    const e = await env();
+    const out = await runAsync(["maintain", "selftune-audit", "--repo", "owner/repo"], e);
+    // Two events => the plural "events"; both the applied and the null-detail shadowed row are listed.
+    expect(out).toMatch(/Self-tune override audit for owner\/repo: 2 events\./);
+    expect(out).toMatch(/override_applied/);
+    expect(out).toMatch(/override_shadowed/);
+    const json = JSON.parse(await runAsync(["maintain", "selftune-audit", "--repo", "owner/repo", "--json"], e)) as {
+      repoFullName: string;
+      audit: Array<{ eventType: string; detail: string | null; createdAt: string }>;
+    };
+    expect(json.repoFullName).toBe("owner/repo");
+    expect(json.audit.map((row) => row.eventType)).toEqual(["override_applied", "override_shadowed"]);
+    // --limit is forwarded as ?limit; the fixture echoes it into the first event's detail and caps the page,
+    // so limit=1 yields exactly one event => the singular "event" (no trailing s).
+    const scoped = await runAsync(["maintain", "selftune-audit", "--repo", "owner/repo", "--limit", "1"], e);
+    expect(scoped).toMatch(/Self-tune override audit for owner\/repo: 1 event\./);
+    expect(scoped).toMatch(/"limit":1/);
+  });
+
   it("generate-issue-drafts dry-runs by default and never forwards create (#6757)", async () => {
     const bodies: Array<{ dryRun?: boolean; create?: boolean; limit?: number }> = [];
     const e = await env({ onIssueDraftRequest: (b) => bodies.push(b) });

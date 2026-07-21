@@ -646,6 +646,23 @@ export async function startFixtureServer(
       );
       return;
     }
+    // #7798 self-tune override audit trail (read-only). Echoes ?limit into the first event's detail so the
+    // CLI/tool limit pass-through is testable, and one event carries a null detail to exercise the plain-text
+    // path's Boolean filter. The audit array is newest-first, matching listOverrideAudit's own ORDER BY.
+    if (request.url?.startsWith("/v1/repos/owner/repo/selftune/overrides/audit") && request.method === "GET") {
+      const limit = new URL(request.url, "http://localhost").searchParams.get("limit");
+      const audit = [
+        { eventType: "override_applied", detail: `{"confidenceFloor":0.6,"limit":${limit ?? "null"}}`, createdAt: "2026-05-30T00:00:00.000Z" },
+        { eventType: "override_shadowed", detail: null, createdAt: "2026-05-29T00:00:00.000Z" },
+      ];
+      response.end(
+        JSON.stringify({
+          repoFullName: "owner/repo",
+          audit: limit ? audit.slice(0, Number(limit)) : audit,
+        }),
+      );
+      return;
+    }
     if (request.url?.startsWith("/v1/repos/owner/repo/outcome-calibration") && request.method === "GET") {
       const windowDays = new URL(request.url, "http://localhost").searchParams.get("windowDays");
       response.end(

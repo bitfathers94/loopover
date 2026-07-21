@@ -22,7 +22,7 @@ async function connect() {
   const apiUrl = await startFixtureServer({
     onApiRequest: (request) => {
       const url = request.url ?? "";
-      if (/pending-actions|settings|gate-precision/.test(url)) capturedRequests.push({ url, method: request.method ?? "GET" });
+      if (/pending-actions|settings|gate-precision|selftune/.test(url)) capturedRequests.push({ url, method: request.method ?? "GET" });
     },
   });
   transport = new StdioClientTransport({
@@ -58,16 +58,17 @@ const MAINTAIN_TOOLS = [
   { name: "loopover_set_agent_paused", args: { ...REPO, paused: true }, contains: "agentPaused" },
   { name: "loopover_set_action_autonomy", args: { ...REPO, action: "merge", level: "auto" }, contains: "autonomy" },
   { name: "loopover_get_gate_precision", args: REPO, contains: "falsePositiveRate" },
+  { name: "loopover_get_selftune_override_audit", args: REPO, contains: "override_applied" },
 ] as const;
 
 describe("loopover-mcp maintain stdio proxies (#6152)", () => {
-  it("registers all 5 maintain tools in the stdio server tool list", async () => {
+  it("registers all 6 maintain tools in the stdio server tool list", async () => {
     await connect();
     const names = (await client!.listTools()).tools.map((tool) => tool.name);
     for (const tool of MAINTAIN_TOOLS) expect(names).toContain(tool.name);
   });
 
-  it("lists all 5 maintain tools via `loopover-mcp tools --json` with non-empty descriptions", async () => {
+  it("lists all 6 maintain tools via `loopover-mcp tools --json` with non-empty descriptions", async () => {
     await connect();
     const payload = JSON.parse(run(["tools", "--json"])) as { tools: Array<{ name: string; description: string; category?: string }> };
     for (const tool of MAINTAIN_TOOLS) {
@@ -123,6 +124,18 @@ describe("loopover-mcp maintain stdio proxies (#6152)", () => {
     expect(payload).toContain("label");
     expect(payload).toContain("merge");
     expect(capturedRequests.map((request) => request.method)).toEqual(["GET", "PUT"]);
+  });
+
+  it("get_selftune_override_audit forwards a supplied limit as ?limit and omits it otherwise", async () => {
+    await connect();
+    const withLimit = await client!.callTool({ name: "loopover_get_selftune_override_audit", arguments: { ...REPO, limit: 5 } });
+    expect(withLimit.isError).toBeFalsy();
+    expect(capturedRequests.some((request) => request.url.includes("/selftune/overrides/audit?limit=5"))).toBe(true);
+
+    capturedRequests = [];
+    const noLimit = await client!.callTool({ name: "loopover_get_selftune_override_audit", arguments: { ...REPO } });
+    expect(noLimit.isError).toBeFalsy();
+    for (const request of capturedRequests) expect(request.url).not.toContain("limit=");
   });
 
   it("rejects an unknown action class and an unknown autonomy level before any API call", async () => {
