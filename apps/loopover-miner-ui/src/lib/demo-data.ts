@@ -5,14 +5,16 @@
 // build-time constant, so the "off" branch (the real fetch calls) is dead-code-eliminated from a demo bundle and
 // vice versa -- a production self-host build never carries this module's data.
 //
-// Scope: the five REST fetchers backing the three main dashboard routes (run-history, ledgers, portfolio +
-// its queue actions, governor). discover/attempt/chat are NOT covered here -- those trigger a real coding-agent
-// iteration or ground against a live MCP connection, and fabricating a convincing multi-minute agent run is a
-// separate, much larger content-design task than tabular summary data (tracked as follow-up work, not this PR).
+// Scope: the six REST fetchers backing the four main dashboard routes (run-history, ledgers, portfolio +
+// its queue actions, governor, ranked-candidates). discover/attempt/chat are NOT covered here -- those trigger a
+// real coding-agent iteration or ground against a live MCP connection, and fabricating a convincing multi-minute
+// agent run is a separate, much larger content-design task than tabular summary data (tracked as follow-up work,
+// not this PR).
 //
 // Every value below is entirely synthetic -- no real repo, run, ledger entry, or account referenced anywhere.
 
 import type { RunStateRow } from "./run-history";
+import type { RankedCandidateRow } from "./ranked-candidates";
 import type { LedgersSummary } from "./ledgers";
 import type { PortfolioQueueSummary } from "./portfolio-queue";
 import type { PortfolioQueueActionItem } from "./portfolio-queue-actions";
@@ -46,6 +48,51 @@ export const DEMO_RUN_STATES: RunStateRow[] = [
     repoFullName: "northwind/inventory",
     state: "planning",
     updatedAt: "2026-07-18T12:30:00.000Z",
+  },
+];
+
+// The last discover run's ranked issue breakdown for the four demo repos (#7675). Scores/dimensions are entirely
+// synthetic and ordered by rankScore, matching the real endpoint's rank-descending output; the last row carries a
+// null htmlUrl so the demo exercises the view's missing-link fallback too.
+export const DEMO_RANKED_CANDIDATES: RankedCandidateRow[] = [
+  {
+    repoFullName: "acme/widgets",
+    issueNumber: 2451,
+    title: "Debounce the settings autosave",
+    htmlUrl: "https://forge.example.com/acme/widgets/issues/2451",
+    rankScore: 0.91,
+    laneFit: 0.95,
+    freshness: 0.88,
+    potential: 0.9,
+    feasibility: 0.86,
+    dupRisk: 0.08,
+    rankedAt: "2026-07-18T14:02:00.000Z",
+  },
+  {
+    repoFullName: "acme/api-gateway",
+    issueNumber: 118,
+    title: "Return 429 with Retry-After on rate limit",
+    htmlUrl: "https://forge.example.com/acme/api-gateway/issues/118",
+    rankScore: 0.82,
+    laneFit: 0.8,
+    freshness: 0.79,
+    potential: 0.85,
+    feasibility: 0.83,
+    dupRisk: 0.14,
+    rankedAt: "2026-07-18T13:47:00.000Z",
+  },
+  {
+    repoFullName: "northwind/inventory",
+    issueNumber: 77,
+    title: "Paginate the low-stock report",
+    htmlUrl: null,
+    rankScore: 0.64,
+    laneFit: 0.7,
+    freshness: 0.58,
+    potential: 0.66,
+    feasibility: 0.72,
+    dupRisk: 0.31,
+    rankedAt: "2026-07-18T12:30:00.000Z",
   },
 ];
 

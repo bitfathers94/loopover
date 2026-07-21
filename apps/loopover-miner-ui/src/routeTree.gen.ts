@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as RunHistoryRouteImport } from './routes/run-history'
+import { Route as RankedCandidatesRouteImport } from './routes/ranked-candidates'
 import { Route as PortfolioRouteImport } from './routes/portfolio'
 import { Route as LedgersRouteImport } from './routes/ledgers'
 import { Route as IndexRouteImport } from './routes/index'
@@ -17,6 +18,11 @@ import { Route as IndexRouteImport } from './routes/index'
 const RunHistoryRoute = RunHistoryRouteImport.update({
   id: '/run-history',
   path: '/run-history',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RankedCandidatesRoute = RankedCandidatesRouteImport.update({
+  id: '/ranked-candidates',
+  path: '/ranked-candidates',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PortfolioRoute = PortfolioRouteImport.update({
@@ -39,12 +45,14 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/ledgers': typeof LedgersRoute
   '/portfolio': typeof PortfolioRoute
+  '/ranked-candidates': typeof RankedCandidatesRoute
   '/run-history': typeof RunHistoryRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/ledgers': typeof LedgersRoute
   '/portfolio': typeof PortfolioRoute
+  '/ranked-candidates': typeof RankedCandidatesRoute
   '/run-history': typeof RunHistoryRoute
 }
 export interface FileRoutesById {
@@ -52,20 +60,29 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/ledgers': typeof LedgersRoute
   '/portfolio': typeof PortfolioRoute
+  '/ranked-candidates': typeof RankedCandidatesRoute
   '/run-history': typeof RunHistoryRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/ledgers' | '/portfolio' | '/run-history'
+  fullPaths:
+    '/' | '/ledgers' | '/portfolio' | '/ranked-candidates' | '/run-history'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/ledgers' | '/portfolio' | '/run-history'
-  id: '__root__' | '/' | '/ledgers' | '/portfolio' | '/run-history'
+  to: '/' | '/ledgers' | '/portfolio' | '/ranked-candidates' | '/run-history'
+  id:
+    | '__root__'
+    | '/'
+    | '/ledgers'
+    | '/portfolio'
+    | '/ranked-candidates'
+    | '/run-history'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   LedgersRoute: typeof LedgersRoute
   PortfolioRoute: typeof PortfolioRoute
+  RankedCandidatesRoute: typeof RankedCandidatesRoute
   RunHistoryRoute: typeof RunHistoryRoute
 }
 
@@ -76,6 +93,13 @@ declare module '@tanstack/react-router' {
       path: '/run-history'
       fullPath: '/run-history'
       preLoaderRoute: typeof RunHistoryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/ranked-candidates': {
+      id: '/ranked-candidates'
+      path: '/ranked-candidates'
+      fullPath: '/ranked-candidates'
+      preLoaderRoute: typeof RankedCandidatesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/portfolio': {
@@ -106,6 +130,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   LedgersRoute: LedgersRoute,
   PortfolioRoute: PortfolioRoute,
+  RankedCandidatesRoute: RankedCandidatesRoute,
   RunHistoryRoute: RunHistoryRoute,
 }
 export const routeTree = rootRouteImport
