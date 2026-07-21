@@ -187,6 +187,7 @@ import { buildFindingTaxonomyDocument, FINDING_TAXONOMY_URI } from "../review/fi
 import { buildEnrichmentAnalyzersTaxonomyDocument, ENRICHMENT_ANALYZERS_URI } from "../review/enrichment-analyzers-taxonomy";
 import { recordPredictedGateCall } from "../review/predicted-gate-calls";
 import { computeContributorCalibration } from "../review/predicted-gate-calibration-ledger";
+import { loadOverride, loadShadowOverride, type StorageEnv } from "../review/auto-apply";
 
 type AppContext = Context<{ Bindings: Env }>;
 type ToolPayload = {
@@ -991,6 +992,25 @@ const gatePrecisionOutputSchema = {
   perGateType: z.array(z.unknown()).optional(),
   overall: z.unknown().optional(),
   signals: z.array(z.string()).optional(),
+};
+
+// #7800 - MCP mirror of GET /v1/repos/:owner/:repo/gate-config/effective. Same resolved-only shape the
+// route returns (never the raw override_audit history or the shadow's queued recommendation), so nullable
+// thresholds plus a boolean shadow-soaking flag.
+const gateConfigEffectiveOutputSchema = {
+  repoFullName: z.string().optional(),
+  effective: z
+    .object({
+      confidenceFloor: z.number().nullable().optional(),
+      scopeCap: z
+        .object({
+          files: z.number().nullable().optional(),
+          lines: z.number().nullable().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+  shadowPending: z.boolean().optional(),
 };
 
 // #5825 - maintainer-authenticated skipped-PR audit trail, mirroring GET /v1/app/skipped-pr-audit's
@@ -1807,6 +1827,7 @@ export const MCP_TOOL_CATEGORIES: Record<string, McpToolCategory> = {
   loopover_get_repo_outcome_patterns: "maintainer",
   loopover_get_outcome_calibration: "maintainer",
   loopover_get_gate_precision: "maintainer",
+  loopover_get_gate_config_effective: "maintainer",
   loopover_get_skipped_pr_audit: "maintainer",
   loopover_get_fleet_analytics: "maintainer",
   loopover_get_recommendation_quality: "maintainer",
@@ -2022,6 +2043,17 @@ export class LoopoverMcp {
         outputSchema: gatePrecisionOutputSchema,
       },
       async (input) => this.toolResult(await this.getGatePrecision(input)),
+    );
+
+    register(
+      "loopover_get_gate_config_effective",
+      {
+        description:
+          "Return a repo's CURRENT effective self-tuned gate thresholds (confidenceFloor, scopeCap files/lines) resolved from the live override, plus a boolean flag that a shadow recommendation is soaking — never the raw override audit history or the shadow's queued values. Repo-scoped, read-only, no GitHub writes.",
+        inputSchema: ownerRepoShape,
+        outputSchema: gateConfigEffectiveOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getGateConfigEffective(input)),
     );
 
     register(
@@ -3484,6 +3516,31 @@ export class LoopoverMcp {
     return {
       summary: `LoopOver gate precision for ${fullName}: ${report.overall.blocked} gate blocks, overall false-positive rate ${report.overall.falsePositiveRate ?? "n/a (below sample threshold)"}.`,
       data: report as unknown as Record<string, unknown>,
+    };
+  }
+
+  // #7800 - surface the existing gate-config/effective read over MCP. Same repo-scoped read gate the REST
+  // route enforces (requireRepoAccess mirrors its requireStaticProtectedApiToken + isMcpReadRepoAllowed
+  // allowlist precedent), and the identical loadOverride/loadShadowOverride pair, returning only the
+  // resolved effective values plus a shadow-soaking flag -- never the raw override audit or shadow payload.
+  private async getGateConfigEffective(input: { owner: string; repo: string }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    await this.requireRepoAccess(fullName);
+    const storageEnv = this.env as unknown as StorageEnv;
+    const [override, shadow] = await Promise.all([loadOverride(storageEnv, fullName), loadShadowOverride(storageEnv, fullName)]);
+    return {
+      summary: `LoopOver effective gate config for ${fullName}: confidenceFloor ${override?.confidenceFloor ?? "unset"}, shadow ${shadow !== null ? "soaking" : "none"}.`,
+      data: {
+        repoFullName: fullName,
+        effective: {
+          confidenceFloor: override?.confidenceFloor ?? null,
+          scopeCap: {
+            files: override?.scopeCap?.files ?? null,
+            lines: override?.scopeCap?.lines ?? null,
+          },
+        },
+        shadowPending: shadow !== null,
+      },
     };
   }
 

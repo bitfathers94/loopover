@@ -676,6 +676,16 @@ export async function startFixtureServer(
       );
       return;
     }
+    if (request.url === "/v1/repos/owner/repo/gate-config/effective" && request.method === "GET") {
+      response.end(
+        JSON.stringify({
+          repoFullName: "owner/repo",
+          effective: { confidenceFloor: 0.9, scopeCap: { files: 12, lines: 400 } },
+          shadowPending: true,
+        }),
+      );
+      return;
+    }
     if (request.url === "/v1/repos/owner/repo/contributor-issue-drafts/generate" && request.method === "POST") {
       // Reflect the forwarded {dryRun, create, limit} back so the CLI test can assert the exact body it sent.
       // The draft title carries an ANSI escape to prove the plain-text path is sanitized (#6261).
