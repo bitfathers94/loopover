@@ -187,8 +187,10 @@ function normalizeIssue(idea: IdeaSubmission, draft: ConstituentIssueDraft, inde
   // Only the two renter-eligible type labels survive; a stray `gittensor:priority` (or anything else) in a
   // draft is dropped so the bridge can never mint a reward label.
   const labels = (draft.labels ?? [inferred]).filter((l) => ALLOWED_ISSUE_TYPE_LABELS.has(l));
+  // A draft that supplies its own criteria wins, but the renter's own hints/constraints still fold in
+  // alongside them (FIRST issue only) so a richer decomposition can't silently drop what the renter stated.
   const criteria = draft.acceptanceCriteria && draft.acceptanceCriteria.length > 0
-    ? draft.acceptanceCriteria
+    ? [...draft.acceptanceCriteria, ...foldIdeaSignals(idea, draft, index)]
     : defaultAcceptanceCriteria(idea, draft, index);
   return {
     key: draft.key,
@@ -206,23 +208,29 @@ function normalizeIssue(idea: IdeaSubmission, draft: ConstituentIssueDraft, inde
   };
 }
 
-// Fold the renter's own success signals into criteria: `acceptanceHints` become behavior criteria, hard
-// `constraints` become constraint criteria, and every issue is guaranteed at least one behavior criterion.
-function defaultAcceptanceCriteria(idea: IdeaSubmission, draft: ConstituentIssueDraft, index: number): AcceptanceCriterion[] {
-  const criteria: AcceptanceCriterion[] = [
-    { id: `${draft.key}-ac1`, statement: `The outcome described by "${draft.title}" is observable when done`, kind: "behavior" },
-  ];
-  // Hints/constraints only fold into the FIRST issue by default (so a multi-issue graph doesn't duplicate
-  // them across every issue); a richer decomposition can override by supplying explicit criteria per draft.
-  if (index === 0) {
-    for (const [i, hint] of (idea.acceptanceHints ?? []).entries()) {
-      if (hint.trim().length > 0) criteria.push({ id: `${draft.key}-hint${i + 1}`, statement: hint, kind: "behavior" });
-    }
-    for (const [i, c] of (idea.constraints ?? []).entries()) {
-      if (c.trim().length > 0) criteria.push({ id: `${draft.key}-con${i + 1}`, statement: c, kind: "constraint" });
-    }
+// Fold the renter's own success signals into criteria: `acceptanceHints` become behavior criteria and hard
+// `constraints` become constraint criteria. Only the FIRST issue (`index === 0`) gets them, so a multi-issue
+// graph doesn't duplicate them across every issue. Shared by the default-criteria path and the explicit-draft
+// path so the renter's stated signals fold in either way — never silently dropped by a self-supplied draft.
+function foldIdeaSignals(idea: IdeaSubmission, draft: ConstituentIssueDraft, index: number): AcceptanceCriterion[] {
+  if (index !== 0) return [];
+  const folded: AcceptanceCriterion[] = [];
+  for (const [i, hint] of (idea.acceptanceHints ?? []).entries()) {
+    if (hint.trim().length > 0) folded.push({ id: `${draft.key}-hint${i + 1}`, statement: hint, kind: "behavior" });
   }
-  return criteria;
+  for (const [i, c] of (idea.constraints ?? []).entries()) {
+    if (c.trim().length > 0) folded.push({ id: `${draft.key}-con${i + 1}`, statement: c, kind: "constraint" });
+  }
+  return folded;
+}
+
+// Every issue is guaranteed at least one behavior criterion; the renter's hints/constraints fold in on top
+// (FIRST issue only, via foldIdeaSignals) when a draft supplies no explicit criteria of its own.
+function defaultAcceptanceCriteria(idea: IdeaSubmission, draft: ConstituentIssueDraft, index: number): AcceptanceCriterion[] {
+  return [
+    { id: `${draft.key}-ac1`, statement: `The outcome described by "${draft.title}" is observable when done`, kind: "behavior" },
+    ...foldIdeaSignals(idea, draft, index),
+  ];
 }
 
 /** Assemble a scored `TaskGraph` from a validated idea and its decomposition (spec §2). Pass `drafts` from

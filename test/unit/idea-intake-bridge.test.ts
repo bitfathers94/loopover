@@ -203,6 +203,22 @@ describe("buildTaskGraph — normalization details", () => {
     expect(g.issues[0]?.labels).toEqual(["gittensor:feature"]); // gittensor:priority stripped
   });
 
+  it("still folds the idea's hints/constraints alongside an explicit first-draft acceptanceCriteria", () => {
+    const g = buildTaskGraph(
+      validIdea({ acceptanceHints: ["existing callers keep working"], constraints: ["no new dependencies"] }),
+      [{
+        key: "issue-1", title: "Add a widget", body: "new capability",
+        acceptanceCriteria: [{ id: "x", statement: "explicit", kind: "artifact" }],
+      }],
+    );
+    const criteria = g.issues[0]?.acceptanceCriteria ?? [];
+    // the draft's own criterion is preserved verbatim...
+    expect(criteria).toContainEqual({ id: "x", statement: "explicit", kind: "artifact" });
+    // ...and the renter's stated hint/constraint are merged in, not silently dropped
+    expect(criteria).toContainEqual({ id: "issue-1-hint1", statement: "existing callers keep working", kind: "behavior" });
+    expect(criteria).toContainEqual({ id: "issue-1-con1", statement: "no new dependencies", kind: "constraint" });
+  });
+
   it("falls back to the inferred label when a draft's labels are all non-eligible", () => {
     const g = buildTaskGraph(idea, [{ key: "issue-1", title: "Fix the broken parser", body: "it crashes", labels: ["gittensor:priority"] }]);
     expect(g.issues[0]?.labels).toEqual(["gittensor:bug"]);
