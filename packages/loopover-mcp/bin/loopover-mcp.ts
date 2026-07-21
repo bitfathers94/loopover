@@ -1406,6 +1406,12 @@ const STDIO_TOOL_DESCRIPTORS = [
       "AI-plan a small set of concrete GitHub issue drafts for a repo from a maintainer-supplied free-form goal, same as `loopover-mcp maintain plan-issues --goal ...`. Dry-run BY DEFAULT: only previews the drafted title/body/labels unless the caller passes BOTH create:true and dryRun:false, so it can never silently open issues. Maintainer access required.",
   },
   {
+    name: "loopover_refresh_repo_docs",
+    category: "maintainer",
+    description:
+      "Force an immediate repo-doc refresh (AGENTS.md/CLAUDE.md, and a skill file when warranted) for one repo, without waiting for the scheduled interval, same as `loopover-mcp maintain refresh-docs`. Only ever opens a pull request -- never a direct commit -- and only when repoDocGeneration is enabled for this repo and the generated content actually changed. Maintainer access required.",
+  },
+  {
     name: "loopover_open_pr",
     category: "agent",
     description:
@@ -2857,6 +2863,22 @@ registerStdioTool(
       `Issue plan for ${owner}/${repo} (status=${payload.status}, dryRun=${payload.dryRun}): ${payload.proposed ?? 0} proposed, ${payload.created ?? 0} created.`,
       payload,
     );
+  },
+);
+
+registerStdioTool(
+  "loopover_refresh_repo_docs",
+  {
+    description: stdioToolDescription("loopover_refresh_repo_docs"),
+    inputSchema: ownerRepoShape,
+  },
+  async ({ owner, repo }: any) => {
+    // #7754: stdio mirror of POST {repoBase}/repo-docs/refresh (the remote loopover_refresh_repo_docs tool and the
+    // `maintain refresh-docs` CLI). It only ever opens -- or finds the already-open -- repo-doc pull request,
+    // never a direct commit, so a single POST with no body is the whole contract; the opened/reused/pullNumber/
+    // url/reason detail rides in the returned payload exactly as the REST route emits it.
+    const payload = await apiPost(`${toolRepoBase(owner, repo)}/repo-docs/refresh`, {});
+    return toolResult(`LoopOver repo-doc refresh for ${owner}/${repo}.`, payload);
   },
 );
 // ── Write-tools (#6149): pure LOCAL-execution spec builders. loopover NEVER performs the write -- each tool
