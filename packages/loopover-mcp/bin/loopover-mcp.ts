@@ -939,6 +939,23 @@ const setActionAutonomyShape = {
   level: z.enum(MAINTAIN_AUTONOMY_LEVELS),
 };
 
+// #7753: mirrors the remote loopover_propose_action tool's input (src/mcp/server.ts's proposeActionShape) and
+// the `maintain propose` CLI, forwarded to POST /v1/repos/:owner/:repo/agent/pending-actions. `actionClass`
+// reuses PROPOSE_ACTION_CLASSES — the CLI's own constant — so `maintain propose`'s validation and this tool's
+// schema can never disagree about what the queue accepts. The action is only STAGED here; a maintainer still
+// accepts or rejects it via loopover_decide_pending_action, so this never executes a write on its own.
+const proposeActionShape = {
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  pullNumber: z.number().int().positive(),
+  actionClass: z.enum(PROPOSE_ACTION_CLASSES),
+  reason: z.string().max(500).optional(),
+  label: z.string().min(1).max(100).optional(),
+  reviewBody: z.string().max(60000).optional(),
+  mergeMethod: z.enum(["merge", "squash", "rebase"]).optional(),
+  closeComment: z.string().max(60000).optional(),
+};
+
 const outcomeCalibrationShape = {
   owner: z.string().min(1),
   repo: z.string().min(1),
@@ -1388,6 +1405,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     name: "loopover_set_action_autonomy",
     category: "agent",
     description: "Set the autonomy level for one action class via a read-merge-write, so the other classes are left untouched. Same as `loopover-mcp maintain set-level <action> <level>`. Maintainer access required.",
+  },
+  {
+    name: "loopover_propose_action",
+    category: "agent",
+    description:
+      "Stage a PR action (label / request_changes / approve / merge / close) into the repo's approval queue for a maintainer to accept or reject, same as `loopover-mcp maintain propose <action-class> <pull-number>`. Maintainer access required; the action is NOT executed until approved.",
   },
   {
     name: "loopover_get_outcome_calibration",
@@ -2808,6 +2831,23 @@ registerStdioTool(
     const autonomy = { ...(current.autonomy ?? {}), [action]: level };
     const payload = await apiFetch(`${base}/settings`, { method: "PUT", body: JSON.stringify({ autonomy }) });
     return toolResult(`Set ${action} autonomy to ${level} for ${owner}/${repo}.`, payload);
+  },
+);
+
+registerStdioTool(
+  "loopover_propose_action",
+  {
+    description: stdioToolDescription("loopover_propose_action"),
+    inputSchema: proposeActionShape,
+  },
+  async ({ owner, repo, pullNumber, actionClass, reason, label, reviewBody, mergeMethod, closeComment }: any) => {
+    // Bare-path POST to the approval queue, exactly as `maintain propose` does it (loopover-mcp.ts's propose
+    // subcommand): the route stages the action for a maintainer to accept or reject — nothing runs here.
+    const payload = await apiPost(
+      `${toolRepoBase(owner, repo)}/agent/pending-actions`,
+      stripUndefined({ pullNumber, actionClass, reason, label, reviewBody, mergeMethod, closeComment }),
+    );
+    return toolResult(`Proposed ${actionClass} on ${owner}/${repo}#${pullNumber} — awaiting maintainer approval.`, payload);
   },
 );
 
