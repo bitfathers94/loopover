@@ -707,6 +707,44 @@ const checkIssueSlopShape = {
   body: z.string().max(40000).optional(),
 };
 
+// #7759: mirrors checkImprovementPotentialShape in src/mcp/server.ts VERBATIM. The bin cannot import from src/
+// (package boundary), so this copy is parity-by-convention — the /v1/lint/improvement-potential route parses
+// with the tool's own exported shape, and mcp-cli-improvement-potential-tool.test.ts pins that a payload this
+// shape accepts is one the route accepts too.
+const checkImprovementPotentialShape = {
+  changedFiles: z
+    .array(z.object({ path: z.string().min(1).max(400), additions: z.number().int().min(0).optional(), deletions: z.number().int().min(0).optional() }))
+    .max(2000)
+    .optional(),
+  tests: z.array(z.string().max(400)).max(2000).optional(),
+  testFiles: z.array(z.string().max(400)).max(2000).optional(),
+  patchCoverageDeltaPercent: z.number().optional(),
+  complexityDeltas: z
+    .array(
+      z.object({
+        file: z.string().min(1).max(400),
+        line: z.number().int().min(1),
+        name: z.string().min(1).max(400),
+        before: z.number().int().min(0),
+        after: z.number().int().min(0),
+        delta: z.number().int(),
+      }),
+    )
+    .max(2000)
+    .optional(),
+  duplicationDeltas: z
+    .array(
+      z.object({
+        file: z.string().min(1).max(400),
+        line: z.number().int().min(1),
+        duplicateOfLine: z.number().int().min(1),
+        lines: z.number().int().min(1),
+      }),
+    )
+    .max(2000)
+    .optional(),
+};
+
 // #6150 — loopover_run_local_scorer's input, mirroring the remote server's changedFileSchema/validationEntrySchema.
 const localScorerChangedFileShape = z
   .object({
@@ -1113,6 +1151,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     name: "loopover_check_issue_slop",
     category: "review",
     description: "Assess the deterministic slop risk of an issue from its title + body alone (no repo data) — flags clearly low-effort issues (empty body, an unfilled template) for triage. Returns slopRisk (0-100), band, findings, and the rubric. Advisory-only.",
+  },
+  {
+    name: "loopover_check_improvement_potential",
+    category: "review",
+    description:
+      "Assess the deterministic structural-improvement potential of a planned change from local diff metadata (paths + line counts) plus optional precomputed complexity/duplication deltas and a patch-coverage delta — an agent-native, source-free positive-signal self-check mirroring loopover_check_slop_risk. Returns the score, band (insufficient-signal/none/minor/moderate/significant), and actionable findings. Deterministic tier only (no LLM judgment); no repo data needed.",
   },
   // #6150 — the miner-auto-dev profile's plan-DAG + local-scorer + gate-prediction tools, previously listed in
   // recommendedTools below but never actually registered.
@@ -1945,6 +1989,19 @@ registerStdioTool(
     inputSchema: checkIssueSlopShape,
   },
   async (input: any) => toolResult("LoopOver issue-slop self-check.", await apiPost("/v1/lint/issue-slop", input)),
+);
+
+// #7759: local stdio mirror of the remote server's loopover_check_improvement_potential. PROXIES rather than
+// computing in-process (like the issue-slop mirror above): the pure builder lives app-side in
+// src/signals/improvement.ts (not yet an @loopover/engine export), so POST /v1/lint/improvement-potential —
+// the same endpoint the `improvement-potential` CLI already calls — stays the single source of truth.
+registerStdioTool(
+  "loopover_check_improvement_potential",
+  {
+    description: stdioToolDescription("loopover_check_improvement_potential"),
+    inputSchema: checkImprovementPotentialShape,
+  },
+  async (input: any) => toolResult("LoopOver improvement-potential self-check.", await apiPost("/v1/lint/improvement-potential", input)),
 );
 
 // Computed in-process from @loopover/engine (#6150) — matches the remote server's own
