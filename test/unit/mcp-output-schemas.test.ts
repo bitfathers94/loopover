@@ -33,6 +33,7 @@ const TOOLS_WITH_OUTPUT_SCHEMA = [
   "loopover_lint_pr_text",
   "loopover_validate_config",
   "loopover_get_registry_changes",
+  "loopover_get_registry_snapshot",
   "loopover_get_upstream_drift",
   "loopover_local_status",
   "loopover_remediation_plan",
@@ -136,6 +137,10 @@ describe("MCP output schema discovery", () => {
     const registryChangesProps = Object.keys((registryChanges?.outputSchema?.properties ?? {}) as Record<string, unknown>);
     expect(registryChangesProps).toEqual(expect.arrayContaining(["currentSnapshotId", "previousSnapshotId", "addedRepos", "removedRepos", "changedRepos", "summary"]));
     expect(registryChangesProps).not.toEqual(expect.arrayContaining(["previous", "current", "added", "removed", "changed", "warnings"]));
+
+    const registrySnapshot = byName.get("loopover_get_registry_snapshot");
+    const registrySnapshotProps = Object.keys((registrySnapshot?.outputSchema?.properties ?? {}) as Record<string, unknown>);
+    expect(registrySnapshotProps).toEqual(expect.arrayContaining(["id", "repoCount", "totalEmissionShare", "repositories", "error"]));
   });
 
   it("preserves the full tool inventory while adding output schemas", async () => {
@@ -188,6 +193,35 @@ describe("MCP tool calls return schema-valid structured content", () => {
     expect((result.structuredContent as Record<string, unknown>).changedRepos).toEqual([
       { repoFullName: "owner/changed", changes: ["emission_share 0.01 -> 0.02"] },
     ]);
+  });
+
+  it("loopover_get_registry_snapshot returns the latest cached snapshot as structured content", async () => {
+    const env = createTestEnv();
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "owner/only": { emission_share: 0.03, issue_discovery_share: 0, label_multipliers: {}, trusted_label_pipeline: false } },
+        { kind: "raw-github", url: "fixture://snapshot" },
+        "2026-05-26T00:00:00.000Z",
+      ),
+    );
+    const { client } = await connectTestClient(env);
+    const result = await client.callTool({ name: "loopover_get_registry_snapshot", arguments: {} });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toBeDefined();
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.repoCount).toBe(1);
+    expect(typeof data.id).toBe("string");
+    expect(Array.isArray(data.repositories)).toBe(true);
+    expect(data.error).toBeUndefined();
+  });
+
+  it("loopover_get_registry_snapshot returns a not-found result when no snapshot is cached yet", async () => {
+    const { client } = await connectTestClient(createTestEnv());
+    const result = await client.callTool({ name: "loopover_get_registry_snapshot", arguments: {} });
+    expect(result.isError).toBeFalsy();
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.error).toBe("registry_snapshot_not_found");
   });
 
   it("loopover_get_repo_context returns validated structured content", async () => {

@@ -201,6 +201,9 @@ export async function startFixtureServer(
     onMarkNotificationsRead?: (body: unknown) => void;
     intakeStatus?: number;
     localBranchAnalysisStatus?: number;
+    /** #7803: when set, GET /v1/registry/snapshot returns the route's 404 (registry_snapshot_not_found)
+     *  instead of a cached snapshot, exercising the not-found branch of the registry-snapshot MCP proxy. */
+    registrySnapshotMissing?: boolean;
     /** #6743: overrides the repo-doc refresh route's default "opened a new PR" response, e.g. to exercise
      *  the reused-PR or not-opened branches. */
     repoDocRefresh?: unknown;
@@ -718,6 +721,27 @@ export async function startFixtureServer(
           generatedAt: "2026-05-30T00:00:00.000Z",
           upstreamDrift: { status: "ok", ruleset: "gittensor-core", lastCheckedAt: "2026-05-30T00:00:00.000Z", warnings: [] },
           reports: [{ id: "drift-1", severity: "info", summary: "no drift detected", detectedAt: "2026-05-30T00:00:00.000Z" }],
+        }),
+      );
+      return;
+    }
+    if (request.url === "/v1/registry/snapshot" && request.method === "GET") {
+      // #7803: mirror the public GET /v1/registry/snapshot route -- either the cached snapshot or its 404.
+      if (options.registrySnapshotMissing) {
+        response.statusCode = 404;
+        response.end(JSON.stringify({ error: "registry_snapshot_not_found" }));
+        return;
+      }
+      response.end(
+        JSON.stringify({
+          id: "snapshot-1",
+          generatedAt: "2026-05-30T00:00:00.000Z",
+          fetchedAt: "2026-05-30T00:00:00.000Z",
+          source: { kind: "raw-github", url: "fixture://registry" },
+          repoCount: 1,
+          totalEmissionShare: 0.01,
+          warnings: [],
+          repositories: [{ repoFullName: "gittensor-core/example" }],
         }),
       );
       return;
