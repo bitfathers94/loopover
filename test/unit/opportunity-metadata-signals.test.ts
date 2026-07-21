@@ -351,6 +351,21 @@ describe("opportunity metadata signals", () => {
     ).toBe(0);
   });
 
+  it("excludes the source issue even when its own echoed peer entry differs only in repoFullName casing", () => {
+    // The peer list echoes the source issue back with a differently-cased (and padded) repoFullName;
+    // the self-skip guard must normalize like the same-repo guard so it isn't counted as a duplicate of itself.
+    expect(
+      computeMetadataDupRisk(base, [{ ...base, repoFullName: "  ACME/Widgets  " }]),
+    ).toBe(0);
+    // A genuine same-repo peer with an overlapping title still raises dupRisk, so the fix only drops the self-row.
+    expect(
+      computeMetadataDupRisk(base, [
+        { ...base, repoFullName: "  ACME/Widgets  " },
+        { ...base, issueNumber: 11, title: base.title },
+      ]),
+    ).toBeGreaterThan(0);
+  });
+
   it("potential covers neutral-only and positive-only label branches", () => {
     expect(computeMetadataPotential({ labels: [] })).toBeCloseTo(0.45, 5);
     expect(computeMetadataPotential({ labels: ["enhancement"] })).toBeCloseTo(0.8, 5);
