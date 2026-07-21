@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# Shared helpers for the self-host deploy scripts (deploy-selfhost-image.sh, deploy-selfhost-prebuilt.sh).
+# Shared helpers for the self-host deploy and post-update verify scripts: deploy-selfhost-image.sh and
+# deploy-selfhost-prebuilt.sh (which use the full set -- env_get/env_put/compose_file_args/
+# maybe_infisical_run), plus selfhost-post-update-check.sh and selfhost-post-update-regression-gate.sh
+# (which source it only for require_cmd/compose_file_args).
 # Sourced, not executed: this file has no shebang-driven side effects and defines functions only.
-# Both callers set ENV_FILE before sourcing this; env_get/env_put fall back to it when no file arg is given.
+# The env_get/env_put callers set ENV_FILE before sourcing this; both functions fall back to it when no
+# file arg is given (the verify scripts don't touch env_get/env_put, so they leave ENV_FILE unset).
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then

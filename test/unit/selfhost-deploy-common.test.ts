@@ -227,3 +227,168 @@ printf 'REACHED_END args=[%s]\\n' "\${compose_args[*]}"
     expect(result.stderr).toContain("compose file not found: missing.yml");
   });
 });
+
+describe("env_get (#7769 -- read a key back out of an env file)", () => {
+  // Source the lib and invoke env_get with (key[, file]) positional args, mirroring runEnvPut above so the
+  // real awk parser runs -- callers consume its stdout via `$(env_get KEY)`, so stdout is what we assert.
+  function runEnvGet(key: string, file?: string, env: Record<string, string> = {}) {
+    const script = `set -eo pipefail; . "${libPath.replace(/\\/g, "/")}"; env_get "$@"`;
+    const args = file === undefined ? [key] : [key, file];
+    return spawnSync("bash", ["-c", script, "bash", ...args], {
+      encoding: "utf8",
+      env: { ...process.env, ...env },
+    });
+  }
+
+  function tempEnvFile(contents: string): { dir: string; file: string } {
+    const dir = mkdtempSync(join(tmpdir(), "loopover-env-get-"));
+    const file = join(dir, ".env");
+    writeFileSync(file, contents);
+    return { dir, file };
+  }
+
+  it("returns a plain unquoted value", () => {
+    const { dir, file } = tempEnvFile("FOO=bar\n");
+    try {
+      const r = runEnvGet("FOO", file);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe("bar\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("strips a matching pair of surrounding double quotes", () => {
+    const { dir, file } = tempEnvFile('FOO="bar baz"\n');
+    try {
+      const r = runEnvGet("FOO", file);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe("bar baz\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("strips a matching pair of surrounding single quotes", () => {
+    const { dir, file } = tempEnvFile("FOO='bar baz'\n");
+    try {
+      const r = runEnvGet("FOO", file);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe("bar baz\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does NOT strip a lone/mismatched quote (only a genuine surrounding pair is unwrapped)", () => {
+    const { dir, file } = tempEnvFile('FOO="bar\n');
+    try {
+      const r = runEnvGet("FOO", file);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe('"bar\n');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("trims surrounding whitespace and keeps a value that itself contains '='", () => {
+    const { dir, file } = tempEnvFile("FOO=  a=b  \n");
+    try {
+      const r = runEnvGet("FOO", file);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe("a=b\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips comment and blank lines and does not prefix-match a longer key", () => {
+    const { dir, file } = tempEnvFile("# a comment\n\nFOOBAR=other\nFOO=target\n");
+    try {
+      const r = runEnvGet("FOO", file);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe("target\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns the first occurrence when a key is defined more than once", () => {
+    const { dir, file } = tempEnvFile("FOO=first\nFOO=second\n");
+    try {
+      const r = runEnvGet("FOO", file);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe("first\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("exits non-zero with no stdout when the key is absent", () => {
+    const { dir, file } = tempEnvFile("FOO=bar\n");
+    try {
+      const r = runEnvGet("MISSING", file);
+      expect(r.status).not.toBe(0);
+      expect(r.stdout).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("exits non-zero when the env file does not exist", () => {
+    const dir = mkdtempSync(join(tmpdir(), "loopover-env-get-"));
+    try {
+      const r = runEnvGet("FOO", join(dir, "nope.env"));
+      expect(r.status).not.toBe(0);
+      expect(r.stdout).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to $ENV_FILE when no explicit file argument is given", () => {
+    const { dir, file } = tempEnvFile("FOO=from-env-file\n");
+    try {
+      const r = runEnvGet("FOO", undefined, { ENV_FILE: file });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe("from-env-file\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("require_cmd (present vs. missing command)", () => {
+  // Source the lib and invoke require_cmd directly. require_cmd only uses shell builtins (command -v, echo,
+  // exit), so the lookup PATH is pinned INSIDE the script -- the spawn itself keeps the real environment so
+  // bash still resolves. A missing command makes require_cmd `exit 1`, terminating the sourcing bash process
+  // before REACHED_END, so both status and stdout are meaningful.
+  function runRequireCmd(cmd: string, lookupPath: string) {
+    const script = `set -eo pipefail; export PATH="${lookupPath}"; . "${libPath.replace(/\\/g, "/")}"; require_cmd "$1"; echo REACHED_END`;
+    return spawnSync("bash", ["-c", script, "bash", cmd], { encoding: "utf8" });
+  }
+
+  it("returns successfully and continues when the command is on PATH", () => {
+    // Isolated PATH holding a single fake executable, so the test never depends on what the host has installed.
+    const dir = mkdtempSync(join(tmpdir(), "loopover-require-cmd-"));
+    try {
+      const binDir = join(dir, "bin");
+      mkdirSync(binDir);
+      const toolPath = join(binDir, "present-tool");
+      writeFileSync(toolPath, "#!/usr/bin/env bash\nexit 0\n");
+      chmodSync(toolPath, 0o755);
+      const r = runRequireCmd("present-tool", binDir);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toContain("REACHED_END");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed with a clear, command-named error when the command is missing", () => {
+    const r = runRequireCmd("definitely-not-a-real-command-xyz", "");
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain("required command not found: definitely-not-a-real-command-xyz");
+    expect(r.stdout).not.toContain("REACHED_END");
+  });
+});
