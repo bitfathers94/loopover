@@ -853,7 +853,7 @@ rate-limit pressure spikes.
 
 ## Self-host maintenance workflow (GitHub Actions)
 
-[`self-host-nightly.yml`](https://github.com/JSONbored/loopover/blob/main/.github/workflows/self-host-nightly.yml)
+[`self-host-maintenance.yml`](https://github.com/JSONbored/loopover/blob/main/.github/workflows/self-host-maintenance.yml)
 is a manual (`workflow_dispatch`) GitHub Actions workflow that checks
 `/ready` against your externally reachable self-host instance and,
 if `INTERNAL_JOB_TOKEN` is configured, triggers a RAG re-index fan-out. It is
