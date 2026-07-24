@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   acquireWorktree,
   closeDefaultWorktreeAllocator,
+  countWorktreeAllocatorFreeSlotsByRepo,
   isProcessAlive,
   openWorktreeAllocator,
   releaseWorktree,
@@ -178,5 +179,58 @@ describe("loopover-miner worktree allocator scaffolding (#4298)", () => {
 
     closeAllCleanupResources(); // what installCliSignalHandlers invokes on SIGINT/SIGTERM
     expect(cleanupResourceCount()).toBe(0);
+  });
+});
+
+describe("worktree allocator right-to-be-forgotten purge (#8320)", () => {
+  it("clears a stale FREE slot for the repo and counts it, but never touches a live active slot", () => {
+    const allocator = tempAllocator({ maxConcurrency: 2 });
+    // slot 0: a live, in-flight attempt for the target repo — its repo_full_name reflects a real on-disk
+    // worktree checkout, so the purge must leave it completely untouched and must never count it.
+    allocator.acquire("attempt-live", "acme/widgets");
+    // slot 1: the stale free-with-repo shape purgeByRepo exists to backstop. Normal release/reclaim always
+    // blanks repo_full_name to NULL on free, so seed it directly through a separate connection.
+    const seed = new DatabaseSync(allocator.dbPath);
+    seed.exec("UPDATE worktree_slots SET repo_full_name = 'acme/widgets' WHERE slot_index = 1");
+    seed.close();
+
+    // The dry-run count matches the real purge exactly: the one stale free slot, never the active one.
+    const countDb = new DatabaseSync(allocator.dbPath, { readOnly: true });
+    expect(countWorktreeAllocatorFreeSlotsByRepo(countDb, "acme/widgets")).toBe(1);
+    countDb.close();
+
+    expect(allocator.purgeByRepo("acme/widgets")).toBe(1);
+
+    const slots = allocator.listSlots();
+    expect(slots.find((slot) => slot.slotIndex === 0)).toMatchObject({
+      status: "active",
+      attemptId: "attempt-live",
+      repoFullName: "acme/widgets",
+    });
+    // The stale free slot is blanked across every owner field, exactly like release()/reclaim do.
+    expect(slots.find((slot) => slot.slotIndex === 1)).toMatchObject({
+      status: "free",
+      attemptId: null,
+      repoFullName: null,
+      ownerPid: null,
+      ownerHost: null,
+      allocatedAt: null,
+    });
+
+    // Idempotent: with the stale row cleared and only the active slot left naming the repo, both are 0.
+    expect(allocator.purgeByRepo("acme/widgets")).toBe(0);
+    const recountDb = new DatabaseSync(allocator.dbPath, { readOnly: true });
+    expect(countWorktreeAllocatorFreeSlotsByRepo(recountDb, "acme/widgets")).toBe(0);
+    recountDb.close();
+  });
+
+  it("returns 0 (and counts 0) when no slot names the repo, and validates the repo argument", () => {
+    const allocator = tempAllocator({ maxConcurrency: 1 });
+    expect(allocator.purgeByRepo("acme/none")).toBe(0);
+    const countDb = new DatabaseSync(allocator.dbPath, { readOnly: true });
+    expect(countWorktreeAllocatorFreeSlotsByRepo(countDb, "acme/none")).toBe(0);
+    countDb.close();
+    // Same owner/repo guard the acquire path enforces (#7525), so a malformed repo can't reach the SQL.
+    expect(() => allocator.purgeByRepo("bad")).toThrow("invalid_repo_full_name");
   });
 });

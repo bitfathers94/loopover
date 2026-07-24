@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openClaimLedger, closeDefaultClaimLedger } from "../../packages/loopover-miner/lib/claim-ledger.js";
 import { initEventLedger, closeDefaultEventLedger } from "../../packages/loopover-miner/lib/event-ledger.js";
@@ -21,6 +22,7 @@ import { openGovernorState } from "../../packages/loopover-miner/lib/governor-st
 import { initRankedCandidatesStore } from "../../packages/loopover-miner/lib/ranked-candidates.js";
 import { openReplaySnapshotStore } from "../../packages/loopover-miner/lib/replay-snapshot.js";
 import { initDenyHookSynthesisStore } from "../../packages/loopover-miner/lib/deny-hook-synthesis.js";
+import { openWorktreeAllocator } from "../../packages/loopover-miner/lib/worktree-allocator.js";
 import { emptyContributionProfile } from "../../packages/loopover-miner/lib/contribution-profile.js";
 import {
   ATTEMPT_LOG_NOT_PURGEABLE_NOTE,
@@ -222,6 +224,7 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       "ranked-candidates": () => rankedCandidatesDbPath,
       "replay-snapshot": () => replaySnapshotDbPath,
       "deny-hook-synthesis": () => denyHookSynthesisDbPath,
+      "worktree-allocator": () => join(root, "worktree-allocator.sqlite3"),
       "attempt-log": () => attemptLogDbPath,
     };
 
@@ -245,6 +248,9 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
         { store: "ranked-candidates", wouldPurge: 1 },
         { store: "replay-snapshot", wouldPurge: 1 },
         { store: "deny-hook-synthesis", wouldPurge: 1 },
+        // worktree-allocator's file is never created in this fixture (no attempt was ever acquired), so its
+        // dry-run count is 0 -- a dedicated test below seeds a real slot pool and asserts a non-zero count.
+        { store: "worktree-allocator", wouldPurge: 0 },
       ],
       attemptLogNote: ATTEMPT_LOG_NOT_PURGEABLE_NOTE,
       attemptLogTotalRows: 0,
@@ -280,12 +286,13 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       "ranked-candidates": () => join(root, "ranked-candidates.sqlite3"),
       "replay-snapshot": () => join(root, "replay-snapshot.sqlite3"),
       "deny-hook-synthesis": () => join(root, "deny-hook-synthesis.sqlite3"),
+      "worktree-allocator": () => join(root, "worktree-allocator.sqlite3"),
       "attempt-log": () => join(root, "attempt-log.sqlite3"),
     };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     expect(runPurge(["--repo", "acme/widgets", "--dry-run", "--json"], { resolveDbPaths })).toBe(0);
     const result = JSON.parse(String(log.mock.calls[0]?.[0]));
-    expect(result.stores).toHaveLength(12);
+    expect(result.stores).toHaveLength(13);
     expect(result.stores.every((entry: { wouldPurge: number }) => entry.wouldPurge === 0)).toBe(true);
     expect(result.attemptLogTotalRows).toBe(0);
     for (const resolve of Object.values(resolveDbPaths)) {
@@ -326,6 +333,7 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       "ranked-candidates": () => join(root, "ranked-candidates.sqlite3"),
       "replay-snapshot": () => join(root, "replay-snapshot.sqlite3"),
       "deny-hook-synthesis": () => join(root, "deny-hook-synthesis.sqlite3"),
+      "worktree-allocator": () => join(root, "worktree-allocator.sqlite3"),
       "attempt-log": () => attemptLogDbPath,
     };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -357,6 +365,7 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       "ranked-candidates": () => join(root, "ranked-candidates.sqlite3"),
       "replay-snapshot": () => join(root, "replay-snapshot.sqlite3"),
       "deny-hook-synthesis": () => join(root, "deny-hook-synthesis.sqlite3"),
+      "worktree-allocator": () => join(root, "worktree-allocator.sqlite3"),
       "attempt-log": () => join(root, "attempt-log.sqlite3"),
     };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -401,6 +410,7 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       LOOPOVER_MINER_RANKED_CANDIDATES_DB: process.env.LOOPOVER_MINER_RANKED_CANDIDATES_DB,
       LOOPOVER_MINER_REPLAY_SNAPSHOT_DB: process.env.LOOPOVER_MINER_REPLAY_SNAPSHOT_DB,
       LOOPOVER_MINER_DENY_HOOK_SYNTHESIS_DB: process.env.LOOPOVER_MINER_DENY_HOOK_SYNTHESIS_DB,
+      LOOPOVER_MINER_WORKTREE_ALLOCATOR_DB: process.env.LOOPOVER_MINER_WORKTREE_ALLOCATOR_DB,
       LOOPOVER_MINER_ATTEMPT_LOG_DB: process.env.LOOPOVER_MINER_ATTEMPT_LOG_DB,
     };
     process.env.LOOPOVER_MINER_CLAIM_LEDGER_DB = join(root, "claim-ledger.sqlite3");
@@ -415,12 +425,13 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
     process.env.LOOPOVER_MINER_RANKED_CANDIDATES_DB = join(root, "ranked-candidates.sqlite3");
     process.env.LOOPOVER_MINER_REPLAY_SNAPSHOT_DB = join(root, "replay-snapshot.sqlite3");
     process.env.LOOPOVER_MINER_DENY_HOOK_SYNTHESIS_DB = join(root, "deny-hook-synthesis.sqlite3");
+    process.env.LOOPOVER_MINER_WORKTREE_ALLOCATOR_DB = join(root, "worktree-allocator.sqlite3");
     process.env.LOOPOVER_MINER_ATTEMPT_LOG_DB = join(root, "attempt-log.sqlite3");
     try {
       const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
       expect(runPurge(["--repo", "acme/widgets", "--dry-run", "--json"])).toBe(0);
       const result = JSON.parse(String(log.mock.calls[0]?.[0]));
-      expect(result.stores).toHaveLength(12);
+      expect(result.stores).toHaveLength(13);
       expect(result.stores.every((entry: { wouldPurge: number }) => entry.wouldPurge === 0)).toBe(true);
       // Nothing was created — dry run against nonexistent default-path stores makes zero writes.
       expect(existsSync(process.env.LOOPOVER_MINER_CLAIM_LEDGER_DB)).toBe(false);
@@ -462,6 +473,7 @@ describe("runPurge (real, #5564, #6599)", () => {
       initRankedCandidatesStore: () => fakeStore(0),
       openReplaySnapshotStore: () => fakeStore(0),
       initDenyHookSynthesisStore: () => fakeStore(0),
+      openWorktreeAllocator: () => fakeStore(0),
     };
 
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -484,6 +496,7 @@ describe("runPurge (real, #5564, #6599)", () => {
         { store: "ranked-candidates", purged: 0 },
         { store: "replay-snapshot", purged: 0 },
         { store: "deny-hook-synthesis", purged: 0 },
+        { store: "worktree-allocator", purged: 0 },
         { store: "attempt-log", purged: null, note: ATTEMPT_LOG_NOT_PURGEABLE_NOTE },
       ],
     });
@@ -528,6 +541,7 @@ describe("runPurge (real, #5564, #6599)", () => {
       initRankedCandidatesStore: () => fakeStore(0),
       openReplaySnapshotStore: () => fakeStore(0),
       initDenyHookSynthesisStore: () => fakeStore(0),
+      openWorktreeAllocator: () => fakeStore(0),
     };
 
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -567,6 +581,7 @@ describe("runPurge (real, #5564, #6599)", () => {
       initRankedCandidatesStore: () => fakeStore(0),
       openReplaySnapshotStore: () => fakeStore(0),
       initDenyHookSynthesisStore: () => fakeStore(0),
+      openWorktreeAllocator: () => fakeStore(0),
     };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     expect(runPurge(["--repo", "acme/widgets", "--json"], options as never)).toBe(2);
@@ -590,6 +605,7 @@ describe("runPurge (real, #5564, #6599)", () => {
       initRankedCandidatesStore: () => fakeStore(0),
       openReplaySnapshotStore: () => fakeStore(0),
       initDenyHookSynthesisStore: () => fakeStore(0),
+      openWorktreeAllocator: () => fakeStore(0),
     };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     expect(runPurge(["--repo", "acme/widgets", "--json"], options as never)).toBe(2);
@@ -615,6 +631,7 @@ describe("runPurge (real, #5564, #6599)", () => {
       LOOPOVER_MINER_RANKED_CANDIDATES_DB: process.env.LOOPOVER_MINER_RANKED_CANDIDATES_DB,
       LOOPOVER_MINER_REPLAY_SNAPSHOT_DB: process.env.LOOPOVER_MINER_REPLAY_SNAPSHOT_DB,
       LOOPOVER_MINER_DENY_HOOK_SYNTHESIS_DB: process.env.LOOPOVER_MINER_DENY_HOOK_SYNTHESIS_DB,
+      LOOPOVER_MINER_WORKTREE_ALLOCATOR_DB: process.env.LOOPOVER_MINER_WORKTREE_ALLOCATOR_DB,
     };
     const claimDbPath = join(root, "claim-ledger.sqlite3");
     const portfolioDbPath = join(root, "portfolio-queue.sqlite3");
@@ -631,6 +648,7 @@ describe("runPurge (real, #5564, #6599)", () => {
     process.env.LOOPOVER_MINER_RANKED_CANDIDATES_DB = join(root, "ranked-candidates.sqlite3");
     process.env.LOOPOVER_MINER_REPLAY_SNAPSHOT_DB = join(root, "replay-snapshot.sqlite3");
     process.env.LOOPOVER_MINER_DENY_HOOK_SYNTHESIS_DB = join(root, "deny-hook-synthesis.sqlite3");
+    process.env.LOOPOVER_MINER_WORKTREE_ALLOCATOR_DB = join(root, "worktree-allocator.sqlite3");
     try {
       // Seed real rows via the default store paths before purging through them.
       const seededClaim = openClaimLedger(claimDbPath);
@@ -701,6 +719,7 @@ describe("runPurge (real, #5564, #6599)", () => {
       "ranked-candidates": () => join(root, "ranked-candidates.sqlite3"),
       "replay-snapshot": () => join(root, "replay-snapshot.sqlite3"),
       "deny-hook-synthesis": () => join(root, "deny-hook-synthesis.sqlite3"),
+      "worktree-allocator": () => join(root, "worktree-allocator.sqlite3"),
       "attempt-log": () => join(root, "attempt-log.sqlite3"),
     };
 
@@ -728,6 +747,7 @@ describe("runPurge (real, #5564, #6599)", () => {
       initRankedCandidatesStore: () => fakeStore(0),
       openReplaySnapshotStore: () => fakeStore(0),
       initDenyHookSynthesisStore: () => fakeStore(0),
+      openWorktreeAllocator: () => fakeStore(0),
       } as never),
     ).toBe(0);
     const purged = JSON.parse(String(log.mock.calls[0]?.[0]));
@@ -778,6 +798,7 @@ describe("runPurge (real, #5564, #6599)", () => {
       initRankedCandidatesStore: () => fakeStore(0),
       openReplaySnapshotStore: () => fakeStore(0),
       initDenyHookSynthesisStore: () => fakeStore(0),
+      openWorktreeAllocator: () => fakeStore(0),
       } as never),
     ).toBe(0);
     const summary = JSON.parse(String(log.mock.calls[0]?.[0]));
@@ -824,6 +845,7 @@ describe("runPurge (real, #5564, #6599)", () => {
       initRankedCandidatesStore: () => fakeStore(0),
       openReplaySnapshotStore: () => fakeStore(0),
       initDenyHookSynthesisStore: () => fakeStore(0),
+      openWorktreeAllocator: () => fakeStore(0),
       } as never),
     ).toBe(0);
     const summary = JSON.parse(String(log.mock.calls[0]?.[0]));
@@ -892,6 +914,7 @@ describe("runPurge (real, #5564, #6599)", () => {
         initRankedCandidatesStore: () => rankedStore,
         openReplaySnapshotStore: () => replayStore,
         initDenyHookSynthesisStore: () => denyStore,
+        openWorktreeAllocator: () => fakeStore(0),
       } as never),
     ).toBe(0);
     const summary = JSON.parse(String(log.mock.calls[0]?.[0]));
@@ -908,5 +931,61 @@ describe("runPurge (real, #5564, #6599)", () => {
     // ...while another repo's rows are untouched.
     expect(replayStore.getSnapshot("acme/other", "def456")).not.toBeNull();
     expect(denyStore.listProposals("acme/other")).toHaveLength(1);
+  });
+
+  it("REGRESSION (#8320): worktree-allocator dry-run count and real purge agree, counting only a stale FREE slot and never a live active one", () => {
+    const root = tempDir();
+    const worktreeDbPath = join(root, "worktree-allocator.sqlite3");
+    const allocator = openWorktreeAllocator({
+      dbPath: worktreeDbPath,
+      worktreeBaseDir: join(root, "worktrees"),
+      maxConcurrency: 2,
+    });
+    closeables.push(allocator);
+    // slot 0: a live, in-flight attempt for the target repo — its repo_full_name reflects a real on-disk
+    // checkout, so it must survive the purge untouched and never be counted as purgeable.
+    allocator.acquire("attempt-live", "acme/widgets");
+    // slot 1: the stale free-with-repo shape purgeByRepo exists to backstop. Normal release/reclaim always
+    // blanks repo_full_name to NULL on free, so this is seeded directly via a separate connection.
+    const seed = new DatabaseSync(worktreeDbPath);
+    seed.exec("UPDATE worktree_slots SET repo_full_name = 'acme/widgets' WHERE slot_index = 1");
+    seed.close();
+
+    // Every other store resolves to a nonexistent temp path (count 0); only worktree-allocator has a real file.
+    const resolveDbPaths = {
+      "claim-ledger": () => join(root, "claim-ledger.sqlite3"),
+      "event-ledger": () => join(root, "event-ledger.sqlite3"),
+      "governor-ledger": () => join(root, "governor-ledger.sqlite3"),
+      "prediction-ledger": () => join(root, "prediction-ledger.sqlite3"),
+      "portfolio-queue": () => join(root, "portfolio-queue.sqlite3"),
+      "run-state": () => join(root, "run-state.sqlite3"),
+      "contribution-profile-cache": () => join(root, "contribution-profile-cache.sqlite3"),
+      "policy-verdict-cache": () => join(root, "policy-verdict-cache.sqlite3"),
+      "governor-state": () => join(root, "governor-state.sqlite3"),
+      "ranked-candidates": () => join(root, "ranked-candidates.sqlite3"),
+      "replay-snapshot": () => join(root, "replay-snapshot.sqlite3"),
+      "deny-hook-synthesis": () => join(root, "deny-hook-synthesis.sqlite3"),
+      "worktree-allocator": () => worktreeDbPath,
+      "attempt-log": () => join(root, "attempt-log.sqlite3"),
+    };
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(runPurge(["--repo", "acme/widgets", "--dry-run", "--json"], { resolveDbPaths })).toBe(0);
+    const dryRun = JSON.parse(String(log.mock.calls[0]?.[0]));
+    // The dry run previews exactly the one stale free slot; the active slot is never purgeable.
+    expect(dryRun.stores).toContainEqual({ store: "worktree-allocator", wouldPurge: 1 });
+
+    // The real purge removes exactly that count and leaves the live active slot fully intact.
+    expect(allocator.purgeByRepo("acme/widgets")).toBe(1);
+    const slots = allocator.listSlots();
+    expect(slots.find((slot) => slot.slotIndex === 0)).toMatchObject({
+      status: "active",
+      attemptId: "attempt-live",
+      repoFullName: "acme/widgets",
+    });
+    expect(slots.find((slot) => slot.slotIndex === 1)).toMatchObject({ status: "free", repoFullName: null });
+
+    // Idempotent: only the active slot still names the repo, so a second purge clears (and counts) nothing.
+    expect(allocator.purgeByRepo("acme/widgets")).toBe(0);
   });
 });

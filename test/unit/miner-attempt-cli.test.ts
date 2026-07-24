@@ -1371,6 +1371,7 @@ describe("runAttempt (#5132)", () => {
           throw new Error("no_free_worktree_slots");
         },
         release: vi.fn(),
+        purgeByRepo: vi.fn(),
         listSlots: () => [],
         close: vi.fn(),
       }),
