@@ -55,6 +55,7 @@ function cutoffIso(days: number, nowMs: number): string {
  * Delete (or, in dry-run, count) rows older than each table's retention window. Returns per-table results.
  * Table/column names come only from the hardcoded {@link RETENTION_POLICY} (never user input) and are
  * identifier-validated defensively; the cutoff is bound as a parameter. Deletes run in bounded batches.
+ * Row counts are read defensively (`?? 0`) so a D1 driver returning no row / no `meta` yields 0, never NaN.
  */
 export async function pruneExpiredRecords(
   env: Env,
