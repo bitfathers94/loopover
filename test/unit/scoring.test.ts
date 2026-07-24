@@ -500,6 +500,30 @@ NOVELTY_BONUS_SCALAR = 3
     expect(refreshed.payload.upstreamSourceSha).toBeUndefined();
     expect(refreshed.constants.MERGED_PR_BASE_SCORE).toBe(25);
     expect(refreshed.sourceKind).toBe("raw-github");
+    // The unpinned fall-back is the sole operator-facing signal that scoring is running against a mutable
+    // ref until the next successful resolve — assert the warning is surfaced so a refactor can't silently drop it.
+    expect(refreshed.warnings.some((warning) => /unpinned/i.test(warning))).toBe(true);
+  });
+
+  it("warns and falls back to empty programming-language weights when only the languages fetch fails", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "token" });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      // constants.py succeeds (usable body) so the refresh takes the raw-github path and reaches the
+      // languages-result branch, instead of short-circuiting into the earlier fail-closed fallback.
+      if (url.includes("constants.py")) return new Response(VALID_CONSTANTS_PY + "MERGED_PR_BASE_SCORE = 25\n");
+      // programming_languages.json fails — the sole scenario that exercises the `!languagesResult.ok` branch.
+      if (url.includes("programming_languages.json")) return new Response("not found", { status: 404 });
+      return new Response("not found", { status: 404 });
+    });
+
+    const refreshed = await refreshScoringModelSnapshot(env);
+
+    // Constants path succeeded (raw-github), so we genuinely reached the languages branch.
+    expect(refreshed.sourceKind).toBe("raw-github");
+    // The failed languages fetch falls back to empty weights rather than blocking the refresh.
+    expect(refreshed.programmingLanguages).toEqual({});
+    expect(refreshed.warnings.some((warning) => /Programming language weights fetch failed/.test(warning))).toBe(true);
   });
 
   it("pins the constants fetch to the resolved upstream SHA (immutable) when it can be resolved", async () => {
