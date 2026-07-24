@@ -26,8 +26,9 @@ export { isCalibrationReport, isCalibrationRow, isObservedOutcomeRecord, isPredi
 /** Normalize a decision string to the calibration vocabulary (`merge` / `close` / `hold`), or `""` when it is
  *  unrecognized. `value` is always the already-validated non-empty string field of a record (the type guards run
  *  first), so no non-string handling is needed here. Accepts both the predicted (`merge`/`close`/`hold`) and the
- *  realized (`merged`/`closed`) forms. */
-function normalizeDecision(value: string): "merge" | "close" | "hold" | "" {
+ *  realized (`merged`/`closed`) forms. Exported so the miner's `metrics` outcome-join (metrics-cli.ts) resolves
+ *  each prediction row through the identical vocabulary instead of re-implementing it. */
+export function normalizeDecision(value: string): "merge" | "close" | "hold" | "" {
   const decision = value.trim().toLowerCase();
   if (decision === "merge" || decision === "merged") return "merge";
   if (decision === "close" || decision === "closed") return "close";
