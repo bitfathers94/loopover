@@ -65,6 +65,77 @@ describe("local branch analysis", () => {
     expect(JSON.stringify(analysis.prPacket)).not.toMatch(/reward|score|wallet|hotkey|farming|payout|ranking|trust score/i);
   });
 
+  // The metadataOnly flag on the score preview is `mode !== "gittensor_root" && mode !== "external_command"`
+  // (src/signals/local-branch.ts). It surfaces to the contributor as the "metadata_only" context caveat in
+  // scorePreview.blockedBy. These three cases exercise each operand of that `&&` independently: the
+  // gittensor_root case (first operand false, short-circuit), the external_command case (first operand true,
+  // second operand false), and the metadata_only case (both operands true).
+  it("does not attach the metadata-only caveat when the local scorer ran in gittensor_root mode (#8325)", () => {
+    const analysis = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        body: "Fixes #7",
+        changedFiles: [{ path: "src/cache.ts", additions: 42, deletions: 4, status: "modified" }],
+        localScorer: { mode: "gittensor_root", sourceTokenScore: 48, totalTokenScore: 80, sourceLines: 46 },
+      },
+      repo,
+      issues: [{ repoFullName: repo.fullName, number: 7, title: "Cache refresh fails", state: "open", labels: ["bug"], linkedPrs: [] }],
+      pullRequests: [],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+    // gittensor_root makes the first operand of the metadataOnly `&&` false, so the caveat is never attached
+    // regardless of the second operand -- the mode alone cannot make metadataOnly true.
+    expect(analysis.scorePreview.blockedBy).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: "metadata_only" })]));
+  });
+
+  it("does not attach the metadata-only caveat when the scorer ran an external_command (#8325)", () => {
+    const analysis = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        body: "Fixes #7",
+        changedFiles: [{ path: "src/cache.ts", additions: 42, deletions: 4, status: "modified" }],
+        localScorer: { mode: "external_command", sourceTokenScore: 48, totalTokenScore: 80, sourceLines: 46 },
+      },
+      repo,
+      issues: [{ repoFullName: repo.fullName, number: 7, title: "Cache refresh fails", state: "open", labels: ["bug"], linkedPrs: [] }],
+      pullRequests: [],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+    // Here the first operand (mode !== "gittensor_root") is true and the second (mode !== "external_command")
+    // is false, so metadataOnly is still false -- the second operand is exercised on its own.
+    expect(analysis.scorePreview.blockedBy).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: "metadata_only" })]));
+  });
+
+  it("attaches the metadata-only caveat only when both operands are true (metadata_only mode) (#8325)", () => {
+    const analysis = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        body: "Fixes #7",
+        changedFiles: [{ path: "src/cache.ts", additions: 42, deletions: 4, status: "modified" }],
+        localScorer: { mode: "metadata_only", sourceTokenScore: 48, totalTokenScore: 80, sourceLines: 46 },
+      },
+      repo,
+      issues: [{ repoFullName: repo.fullName, number: 7, title: "Cache refresh fails", state: "open", labels: ["bug"], linkedPrs: [] }],
+      pullRequests: [],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+    // Both operands true (mode is neither gittensor_root nor external_command) -> metadataOnly is true and the
+    // contributor sees the "metadata_only" caveat on their score preview.
+    expect(analysis.scorePreview.blockedBy).toEqual(expect.arrayContaining([expect.objectContaining({ code: "metadata_only" })]));
+  });
+
   it("surfaces a duplicate_risk reducer when the branch collides with a high-risk overlap cluster", () => {
     const analysis = buildLocalBranchAnalysis({
       input: {
