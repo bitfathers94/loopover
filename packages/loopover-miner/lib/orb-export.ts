@@ -1,9 +1,8 @@
-import { chmodSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { join } from "node:path";
 import { createHash, createHmac } from "node:crypto";
 import { generateAnonSecret, hmacAnonymize as engineHmacAnonymize } from "@loopover/engine";
+import { openLocalStoreDb } from "./local-store.js";
 import { readPrOutcomes } from "./pr-outcome.js";
 import type { NormalizedPrOutcomePayload, PrOutcomeLedgerReader } from "./pr-outcome.js";
 import { initEventLedger } from "./event-ledger.js";
@@ -125,10 +124,9 @@ export function buildAnonymizedOrbBatch(
  */
 export function openOrbExportStore(dbPath: string = resolveOrbExportDbPath()): OrbExportStore {
   const resolvedPath = normalizeDbPath(dbPath);
-  mkdirSync(dirname(resolvedPath), { recursive: true, mode: 0o700 });
-  const db = new DatabaseSync(resolvedPath);
-  chmodSync(resolvedPath, 0o600);
-  db.exec("PRAGMA busy_timeout = 5000");
+  // openLocalStoreDb centralizes the mkdir(0o700)/chmod(0o600)/busy_timeout + crash-safe cleanup registration so
+  // a SIGINT/SIGTERM/uncaught-exception mid-write closes the handle instead of leaving the file half-written (#4826).
+  const db = openLocalStoreDb(resolvedPath);
   db.exec(`CREATE TABLE IF NOT EXISTS orb_export_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
 
   const getStatement = db.prepare("SELECT value FROM orb_export_meta WHERE key = ?");

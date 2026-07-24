@@ -1,7 +1,8 @@
-import { accessSync, chmodSync, constants, existsSync, mkdirSync } from "node:fs";
+import { accessSync, constants, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { openLocalStoreDb } from "./local-store.js";
 import { applySchemaMigrations } from "./schema-version.js";
 import { reportCliFailure } from "./cli-error.js";
 import { resolveGitHubToken } from "./github-token-resolution.js";
@@ -52,9 +53,12 @@ export function resolveLaptopStateDbPath(env: Record<string, string | undefined>
 export function initLaptopState(env: Record<string, string | undefined> = process.env): LaptopInitResult {
   const stateDir = resolveMinerStateDir(env);
   const dbPath = resolveLaptopStateDbPath(env);
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const created = !existsSync(dbPath);
-  const db = new DatabaseSync(dbPath);
+  // openLocalStoreDb centralizes the mkdir(0o700)/chmod(0o600)/busy_timeout + crash-safe cleanup registration so
+  // a SIGINT/SIGTERM/uncaught-exception mid-bootstrap closes the handle instead of leaving the file half-written
+  // (#4826) — this store previously had no busy-timeout and no crash-safety registration at all. `dirname(dbPath)`
+  // is the state dir, so openLocalStoreDb's own mkdir replaces the explicit one here.
+  const db = openLocalStoreDb(dbPath);
   db.exec(`
     CREATE TABLE IF NOT EXISTS laptop_meta (
       key TEXT PRIMARY KEY,
@@ -67,7 +71,6 @@ export function initLaptopState(env: Record<string, string | undefined> = proces
     db.prepare("INSERT INTO laptop_meta (key, value) VALUES ('initialized_at', ?)")
       .run(new Date().toISOString());
   }
-  chmodSync(dbPath, 0o600);
   db.close();
   return { stateDir, dbPath, created };
 }

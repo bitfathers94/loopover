@@ -36,6 +36,7 @@ import {
   resolveLaptopStateDbPath,
   runInit,
 } from "../../packages/loopover-miner/lib/laptop-init.js";
+import * as processLifecycle from "../../packages/loopover-miner/lib/process-lifecycle.js";
 
 const roots: string[] = [];
 
@@ -71,6 +72,19 @@ describe("loopover-miner laptop init (#2329)", () => {
     expect(existsSync(first.dbPath)).toBe(true);
     expect(existsSync(first.stateDir)).toBe(true);
     expect(checkLaptopStateSqlite(env).ok).toBe(true);
+  });
+
+  it("routes the bootstrap open through openLocalStoreDb so it is registered for crash-safe cleanup (#4826)", () => {
+    const root = tempRoot();
+    const env = { LOOPOVER_MINER_CONFIG_DIR: join(root, "state") };
+    const registerSpy = vi.spyOn(processLifecycle, "registerCleanupResource");
+    initLaptopState(env);
+    // This store previously opened `new DatabaseSync` directly with no crash-safety registration at all; it now
+    // goes through openLocalStoreDb, which registers the handle so a SIGINT/SIGTERM/uncaught-exception mid-init
+    // closes it instead of leaving a half-written file (#4826). The spy calls through, so the balanced close still
+    // unregisters -- no resource is leaked past the call.
+    expect(registerSpy).toHaveBeenCalledTimes(1);
+    expect(processLifecycle.cleanupResourceCount()).toBe(0);
   });
 
   it("re-running init is idempotent and does not clobber existing metadata", () => {
