@@ -144,6 +144,9 @@ export function decidePublicSurface(input: PublicSurfaceDecisionInput): PublicSu
   }
 
   const willComment = shouldPublishPrComment(settings, input.minerStatus);
+  // The second disjunct is an inline fallback for oss_maintainer repos whose miner status is still
+  // "not_checked": shouldApplyPrLabel returns false there, so this mirrors its autoLabel/publicSurface
+  // rule to let the webhook processor label a PR before the official Gittensor miner lookup completes.
   const willLabel =
     shouldApplyPrLabel(settings, input.minerStatus) ||
     (settings.publicAudienceMode === "oss_maintainer" && input.minerStatus === "not_checked" && settings.autoLabelEnabled && (settings.publicSurface === "comment_and_label" || settings.publicSurface === "label_only"));

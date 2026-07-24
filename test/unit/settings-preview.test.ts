@@ -134,6 +134,45 @@ describe("decidePublicSurface", () => {
     expect(decision).toMatchObject({ skipped: false, willComment: false, willLabel: false, willCheckRun: false, actions: ["none"] });
     expect(decision.summary).toMatch(/no surface action is enabled/);
   });
+
+  // #8324: willLabel's inline oss_maintainer + not_checked fallback disjunct. shouldApplyPrLabel bails to
+  // false for an oss_maintainer repo whose miner status isn't "confirmed", so on a not_checked PR this
+  // second disjunct is the sole thing that can set willLabel -- it decides whether the live webhook
+  // processor labels a PR before the official Gittensor miner lookup has completed. Each case pins one
+  // operand of the disjunct's `&& (... || ...)` chain.
+  describe("oss_maintainer + not_checked labels via the willLabel fallback disjunct", () => {
+    const decideNotChecked = (over: Partial<RepositorySettings>) =>
+      decidePublicSurface({
+        settings: settings({ publicAudienceMode: "oss_maintainer", autoLabelEnabled: true, commentMode: "off", checkRunMode: "off", ...over }),
+        authorLogin: "contributor",
+        authorAssociation: "NONE",
+        minerStatus: "not_checked",
+      });
+
+    it("labels a comment_and_label surface even though shouldApplyPrLabel is false for a not_checked miner status", () => {
+      const decision = decideNotChecked({ publicSurface: "comment_and_label" });
+      expect(decision.willLabel).toBe(true);
+      expect(decision.actions).toContain("label");
+    });
+
+    it("labels a label_only surface", () => {
+      const decision = decideNotChecked({ publicSurface: "label_only" });
+      expect(decision.willLabel).toBe(true);
+      expect(decision.actions).toEqual(["label"]);
+    });
+
+    it("does not label a comment_only surface -- the disjunct's own publicSurface check excludes it", () => {
+      const decision = decideNotChecked({ publicSurface: "comment_only" });
+      expect(decision.willLabel).toBe(false);
+      expect(decision.actions).not.toContain("label");
+    });
+
+    it("does not label when autoLabelEnabled is false, falling back to shouldApplyPrLabel's own false result", () => {
+      const decision = decideNotChecked({ publicSurface: "comment_and_label", autoLabelEnabled: false });
+      expect(decision.willLabel).toBe(false);
+      expect(decision.actions).not.toContain("label");
+    });
+  });
 });
 
 describe("buildRepoSettingsPreview", () => {
