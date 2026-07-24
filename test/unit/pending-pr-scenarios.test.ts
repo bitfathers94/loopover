@@ -461,4 +461,42 @@ describe("pending PR scenario detection", () => {
     expect(records.pullRequestChecks).toHaveLength(0);
     vi.restoreAllMocks();
   });
+
+  it("excludes PRs from ghost/deleted accounts whose authorLogin is null or undefined", async () => {
+    const env = {} as Env;
+    const reviewsSpy = vi.spyOn(repositories, "listPullRequestReviews").mockResolvedValue([approvedReview(80)]);
+    const checksSpy = vi.spyOn(repositories, "listCheckSummaries").mockResolvedValue([]);
+    const records = await loadContributorRepoOpenPrSignalRecords(env, "entrius/allways-ui", "miner-a", [
+      pr({ number: 80, authorLogin: null }),
+      pr({ number: 81, authorLogin: undefined }),
+    ]);
+    // sameLogin's `value &&` short-circuit must exclude an unresolved author rather than match or throw.
+    expect(records.pullRequestReviews).toHaveLength(0);
+    expect(records.pullRequestChecks).toHaveLength(0);
+    expect(reviewsSpy).not.toHaveBeenCalled();
+    expect(checksSpy).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
+  it("matches contributor open PRs case-insensitively on repo full name", async () => {
+    const env = {} as Env;
+    vi.spyOn(repositories, "listPullRequestReviews").mockResolvedValue([approvedReview(82)]);
+    vi.spyOn(repositories, "listCheckSummaries").mockResolvedValue([]);
+    const records = await loadContributorRepoOpenPrSignalRecords(env, "entrius/allways-ui", "miner-a", [
+      pr({ number: 82, repoFullName: "Entrius/Allways-UI" }),
+    ]);
+    expect(records.pullRequestReviews).toHaveLength(1);
+    vi.restoreAllMocks();
+  });
+
+  it("matches contributor open PRs case-insensitively on author login", async () => {
+    const env = {} as Env;
+    vi.spyOn(repositories, "listPullRequestReviews").mockResolvedValue([approvedReview(83)]);
+    vi.spyOn(repositories, "listCheckSummaries").mockResolvedValue([]);
+    const records = await loadContributorRepoOpenPrSignalRecords(env, "entrius/allways-ui", "miner-a", [
+      pr({ number: 83, authorLogin: "Miner-A" }),
+    ]);
+    expect(records.pullRequestReviews).toHaveLength(1);
+    vi.restoreAllMocks();
+  });
 });
