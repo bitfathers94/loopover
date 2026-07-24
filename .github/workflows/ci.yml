@@ -649,7 +649,7 @@ jobs:
         run: npm run control-plane:test
       - name: Control-plane coverage
         if: ${{ github.event_name == 'push' || needs.changes.outputs.controlPlane == 'true' }}
-        run: npm run control-plane:coverage || true
+        run: npm run control-plane:coverage
       - name: Verify control-plane coverage report exists
         if: ${{ github.event_name == 'push' || needs.changes.outputs.controlPlane == 'true' }}
         run: |
