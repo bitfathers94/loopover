@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createApp } from "../../src/api/routes";
-import { markAiReviewPublished, putCachedAiReview, upsertRepositoryFromGitHub } from "../../src/db/repositories";
+import { markAiReviewPublished, putCachedAiReview, upsertPullRequestFromGitHub, upsertRepositoryFromGitHub } from "../../src/db/repositories";
 import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { createTestEnv } from "../helpers/d1";
 
@@ -17,11 +17,25 @@ async function seedRepo(env: Env, aiReviewMode: string) {
   await upsertRepoFocusManifest(env, "acme/widgets", { settings: { aiReviewMode } });
 }
 
+async function seedPull(env: Env, authorLogin: string, number = 11) {
+  await upsertPullRequestFromGitHub(env, "acme/widgets", {
+    number,
+    title: "a change",
+    state: "open",
+    user: { login: authorLogin },
+    author_association: "CONTRIBUTOR",
+    head: { sha: "sha-1", ref: "feature" },
+    base: { ref: "main" },
+    labels: [],
+  });
+}
+
 describe("GET /v1/repos/:owner/:repo/pulls/:number/ai-review-findings (#6619)", () => {
   it("returns a ready payload with the PR's structured findings", async () => {
     const app = createApp();
     const env = createTestEnv();
     await seedRepo(env, "advisory");
+    await seedPull(env, "miner1");
     await putCachedAiReview(env, "acme/widgets", 11, "sha-1", "advisory", { notes: "Clean review.", reviewerCount: 1 });
     await markAiReviewPublished(env, "acme/widgets", 11, "sha-1");
 
@@ -40,6 +54,7 @@ describe("GET /v1/repos/:owner/:repo/pulls/:number/ai-review-findings (#6619)", 
     const app = createApp();
     const env = createTestEnv();
     await seedRepo(env, "block");
+    await seedPull(env, "miner1");
 
     const response = await app.request(`${PATH}?login=miner1`, { headers: apiHeaders(env) }, env);
     expect(response.status).toBe(200);
@@ -50,6 +65,7 @@ describe("GET /v1/repos/:owner/:repo/pulls/:number/ai-review-findings (#6619)", 
     const app = createApp();
     const env = createTestEnv();
     await seedRepo(env, "off");
+    await seedPull(env, "miner1");
 
     const response = await app.request(`${PATH}?login=miner1`, { headers: apiHeaders(env) }, env);
     expect(response.status).toBe(200);
@@ -102,11 +118,51 @@ describe("GET /v1/repos/:owner/:repo/pulls/:number/ai-review-findings (#6619)", 
     const app = createApp();
     const env = createTestEnv();
     await seedRepo(env, "advisory");
+    await seedPull(env, "miner1");
     await putCachedAiReview(env, "acme/widgets", 11, "sha-1", "advisory", { notes: "Clean review.", reviewerCount: 1 });
     await markAiReviewPublished(env, "acme/widgets", 11, "sha-1");
 
     const response = await app.request(`${PATH}?login=miner1`, { headers: apiHeaders(env) }, env);
     const text = JSON.stringify(await response.json());
     expect(text).not.toMatch(/wallet|hotkey|coldkey|trust score|reward estimate/i);
+  });
+
+  it("403s a contributor querying a PR authored by someone else, before any findings are read (#8659)", async () => {
+    // The access-control fix: miner1 authenticates as themselves (?login=miner1) but the PR belongs to
+    // other-miner. requireContributorAccess passes (miner1 IS miner1); the per-PR ownership check must still
+    // reject, mirroring the MCP tool — otherwise miner1 reads other-miner's private AI-review findings.
+    const app = createApp();
+    const env = createTestEnv();
+    await seedRepo(env, "advisory");
+    await seedPull(env, "other-miner");
+    await putCachedAiReview(env, "acme/widgets", 11, "sha-1", "advisory", { notes: "Clean review.", reviewerCount: 1 });
+    await markAiReviewPublished(env, "acme/widgets", 11, "sha-1");
+
+    const response = await app.request(`${PATH}?login=miner1`, { headers: apiHeaders(env) }, env);
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: "forbidden" });
+  });
+
+  it("still returns 200 with findings to the PR's actual owning login (regression for the fix)", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    await seedRepo(env, "advisory");
+    await seedPull(env, "miner1");
+    await putCachedAiReview(env, "acme/widgets", 11, "sha-1", "advisory", { notes: "Clean review.", reviewerCount: 1 });
+    await markAiReviewPublished(env, "acme/widgets", 11, "sha-1");
+
+    const response = await app.request(`${PATH}?login=miner1`, { headers: apiHeaders(env) }, env);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ status: "ready", login: "miner1", headSha: "sha-1" });
+  });
+
+  it("404s a PR number that does not exist, distinct from the 403 for a foreign author", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    await seedRepo(env, "advisory");
+    // No PR row seeded for #11 at all.
+    const response = await app.request(`${PATH}?login=miner1`, { headers: apiHeaders(env) }, env);
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({ status: "not_found", pullNumber: 11, login: "miner1" });
   });
 });

@@ -228,7 +228,7 @@ import { evaluateEscalation } from "../loop-escalation";
 import { buildResultsPayload } from "../results-payload";
 import { buildProgressSnapshot } from "../loop-progress";
 import { validateIdeaSubmission, buildTaskGraph, buildClaimPlan } from "../idea-intake";
-import { loadPrAiReviewFindings } from "../mcp/pr-ai-review-findings";
+import { assertContributorOwnsPullRequest, loadPrAiReviewFindings } from "../mcp/pr-ai-review-findings";
 import {
   buildMcpCompatibilityMetadata,
   LATEST_RECOMMENDED_MCP_VERSION,
@@ -3463,6 +3463,18 @@ export function createApp() {
     if (!login) return c.json({ error: "login_required" }, 400);
     const unauthorized = await requireContributorAccess(c, login);
     if (unauthorized) return unauthorized;
+    // Per-PR ownership check, mirroring the `loopover_get_pr_ai_review_findings` MCP tool's guard order
+    // (src/mcp/server.ts): `requireContributorAccess` only proves the caller IS `login`; it does not prove the
+    // target PR belongs to `login`. Without this, any contributor could read another contributor's findings for
+    // any readable PR by passing their own login (#8659). Fetch the PR first so a missing PR is a distinct 404,
+    // then reject a foreign author with 403 before any findings are read.
+    const pullRequest = await getPullRequest(c.env, fullName, number);
+    if (!pullRequest) return c.json({ status: "not_found", repoFullName: fullName, pullNumber: number, login: login.toLowerCase(), findings: [], categoryCounts: {} }, 404);
+    try {
+      assertContributorOwnsPullRequest(pullRequest.authorLogin, login);
+    } catch {
+      return c.json({ error: "forbidden" }, 403);
+    }
     return c.json(await loadPrAiReviewFindings(c.env, { repoFullName: fullName, pullNumber: number, login }));
   });
 
