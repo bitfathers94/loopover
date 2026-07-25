@@ -14,7 +14,12 @@
 //
 // Env-var decision (#8287's own deliverable): POSTHOG_API_KEY/POSTHOG_HOST are the SAME vars #6235's MCP
 // telemetry (src/mcp/telemetry.ts) already reads off the typed Cloudflare Env -- one project key activates
-// both surfaces, the MCP tool-call allowlist (#6228) is untouched. Everything else here (POSTHOG_MIN_SEVERITY,
+// both surfaces, the MCP tool-call allowlist (#6228) is untouched. LOOPOVER_CENTRAL_POSTHOG_KEY (#8626) is a
+// self-host-only FALLBACK source for that same project key: the hosted control-plane injects it into every
+// tenant container's process env (control-plane/src/container-driver.ts's CENTRAL_POSTHOG_KEY_ENV_VAR), and
+// initPostHog reads it only when POSTHOG_API_KEY is unset -- an operator's own explicit POSTHOG_API_KEY always
+// wins, a hosted-injected value is a fallback and never a silent override, matching LOOPOVER_TENANT_SECRET_TOKEN's
+// identical precedence with its operator-facing counterpart. Everything else here (POSTHOG_MIN_SEVERITY,
 // POSTHOG_REPO_MIN_SEVERITY, POSTHOG_ENVIRONMENT, POSTHOG_SERVER_NAME, POSTHOG_RELEASE) is self-host-only,
 // read off real process.env, never added to src/env.d.ts's typed Env, matching that file's precedent for
 // self-host-exclusive config.
@@ -129,11 +134,13 @@ function operationalProperties(context: Record<string, unknown> | undefined): Re
   return properties;
 }
 
-/** Initialize PostHog from the environment. Returns false (and stays a no-op) when POSTHOG_API_KEY is unset --
- *  the SAME var #6235's MCP telemetry reads (env-var decision, #8287). `env` is real process.env, matching
- *  initSentry's identical NodeJS.ProcessEnv shape. */
+/** Initialize PostHog from the environment. The project key resolves as POSTHOG_API_KEY (the operator's own
+ *  explicit config, the SAME var #6235's MCP telemetry reads) first, then LOOPOVER_CENTRAL_POSTHOG_KEY (#8626,
+ *  the fleet-wide key the hosted control-plane injects into tenant containers) as a fallback -- an operator's
+ *  own key always wins, the injected value is never a silent override. Returns false (and stays a no-op) when
+ *  neither is set. `env` is real process.env, matching initSentry's identical NodeJS.ProcessEnv shape. */
 export async function initPostHog(env: NodeJS.ProcessEnv): Promise<boolean> {
-  const apiKey = processEnvString(env, "POSTHOG_API_KEY");
+  const apiKey = processEnvString(env, "POSTHOG_API_KEY") ?? processEnvString(env, "LOOPOVER_CENTRAL_POSTHOG_KEY");
   if (!apiKey) return false;
   await loadNodeHasher();
   const { PostHog } = await import("posthog-node");
