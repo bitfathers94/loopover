@@ -7788,6 +7788,133 @@ describe("queue processors", () => {
     expect(stored.results.every((row) => row.actor_hash.startsWith("sha256:"))).toBe(true);
   });
 
+  it("#8682: records a non-miner PR author's vote on their OWN chat answer when commandRateLimitPolicy is hold", async () => {
+    // Before #8682 authorizeFeedbackActor threaded no command context, so isAuthorizedCommandActor fell back to
+    // the "preflight" default policy (roles maintainer/collaborator/confirmed_miner). A plain PR author who was
+    // legitimately allowed to receive a `chat` answer (via the pr_author + commandRateLimitPolicy: "hold" path,
+    // which never requires confirmed-miner status) had their own +1/-1 vote wrongly denied with
+    // pr_author_not_confirmed_miner. Threading the real `chat` policy through now records the vote.
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "maintainer" });
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { commandRateLimitPolicy: "hold" } });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 77,
+      title: "Contributor chat answer",
+      state: "open",
+      user: { login: "oktofeesh1" },
+      author_association: "NONE",
+    });
+    // A plain contributor: NOT a maintainer, NOT the repo owner, and explicitly NOT a confirmed miner.
+    await upsertOfficialMinerDetection(env, "oktofeesh1", { status: "not_found" }, 60 * 60 * 1000);
+    await upsertAgentCommandAnswer(env, commandAnswer("answer-chat", "chat", { responseCommentId: 9101 }));
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "feedback-chat-author",
+      eventName: "reaction",
+      payload: {
+        action: "created",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 77, title: "Contributor chat answer", state: "open", pull_request: {}, user: { login: "oktofeesh1" }, author_association: "NONE" },
+        comment: { id: 9101, body: commandAnswerBody("answer-chat", "chat"), user: { login: "loopover-orb[bot]", type: "Bot" } },
+        reaction: { id: 1, content: "+1", user: { login: "oktofeesh1", type: "User" } },
+      },
+    });
+
+    const audit = await env.DB.prepare("select event_type, detail from audit_events where event_type like ? order by created_at")
+      .bind("github_app.agent_command_feedback_%")
+      .all<{ event_type: string; detail: string | null }>();
+    expect(audit.results).toEqual(
+      expect.arrayContaining([expect.objectContaining({ event_type: "github_app.agent_command_feedback_recorded" })]),
+    );
+    expect(audit.results).not.toContainEqual(
+      expect.objectContaining({ event_type: "github_app.agent_command_feedback_denied" }),
+    );
+    const stored = await env.DB.prepare("select vote, source, actor_kind from github_agent_command_feedback").all<{ vote: string; source: string; actor_kind: string }>();
+    expect(stored.results).toEqual([{ vote: "useful", source: "github_reaction", actor_kind: "author" }]);
+  });
+
+  it("#8682: honors a repo's custom commandAuthorization override for feedback voting (previously ignored)", async () => {
+    // Regression for the second half of #8682: because the policy objects were never threaded, feedback voting
+    // silently ignored any per-repo commandAuthorization override. Here `next-action` is NOT rate-limited, and
+    // the repo widens it to include `pr_author`; under the old "preflight"-default behavior the override was
+    // ignored and a non-miner PR author's vote was denied. Threading the real command + policy now honors it.
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "maintainer" });
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", {
+      settings: {
+        commandAuthorization: {
+          default: ["maintainer", "collaborator", "confirmed_miner"],
+          commands: { "next-action": ["maintainer", "collaborator", "pr_author"] },
+        },
+      },
+    });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 88,
+      title: "Contributor next-action answer",
+      state: "open",
+      user: { login: "oktofeesh1" },
+      author_association: "NONE",
+    });
+    await upsertOfficialMinerDetection(env, "oktofeesh1", { status: "not_found" }, 60 * 60 * 1000);
+    await upsertAgentCommandAnswer(env, { ...commandAnswer("answer-next", "next-action", { responseCommentId: 9201 }), issueNumber: 88 });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "feedback-next-override",
+      eventName: "reaction",
+      payload: {
+        action: "created",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 88, title: "Contributor next-action answer", state: "open", pull_request: {}, user: { login: "oktofeesh1" }, author_association: "NONE" },
+        comment: { id: 9201, body: commandAnswerBody("answer-next", "next-action"), user: { login: "loopover-orb[bot]", type: "Bot" } },
+        reaction: { id: 1, content: "-1", user: { login: "oktofeesh1", type: "User" } },
+      },
+    });
+
+    const audit = await env.DB.prepare("select event_type, detail from audit_events where event_type like ? order by created_at")
+      .bind("github_app.agent_command_feedback_%")
+      .all<{ event_type: string; detail: string | null }>();
+    expect(audit.results).toEqual(
+      expect.arrayContaining([expect.objectContaining({ event_type: "github_app.agent_command_feedback_recorded" })]),
+    );
+    expect(audit.results).not.toContainEqual(
+      expect.objectContaining({ event_type: "github_app.agent_command_feedback_denied", detail: "pr_author_not_confirmed_miner" }),
+    );
+    const stored = await env.DB.prepare("select vote, actor_kind from github_agent_command_feedback").all<{ vote: string; actor_kind: string }>();
+    expect(stored.results).toEqual([{ vote: "not_useful", actor_kind: "author" }]);
+  });
+
+  it("#8682: passes no command name for a legacy answer whose stored command is not a known mention command", async () => {
+    // A persisted answer can carry a legacy/unrecognized `command` string; isLoopOverMentionCommandName narrows
+    // it to undefined so isAuthorizedCommandActor keeps its prior default-policy behavior for those records.
+    // The repo owner is still authorized via the owner short-circuit, so the vote is recorded regardless.
+    const env = createTestEnv();
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: {} });
+    await upsertAgentCommandAnswer(env, commandAnswer("answer-legacy", "legacy-preflight", { responseCommentId: 9301 }));
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "feedback-legacy-owner",
+      eventName: "reaction",
+      payload: {
+        action: "created",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 77, title: "Legacy answer", state: "open", pull_request: {}, user: { login: "someone" }, author_association: "NONE" },
+        comment: { id: 9301, body: commandAnswerBody("answer-legacy", "legacy-preflight"), user: { login: "loopover-orb[bot]", type: "Bot" } },
+        reaction: { id: 1, content: "+1", user: { login: "JSONbored", type: "User" } },
+      },
+    });
+
+    const audit = await env.DB.prepare("select event_type, detail from audit_events where event_type like ? order by created_at")
+      .bind("github_app.agent_command_feedback_%")
+      .all<{ event_type: string; detail: string | null }>();
+    expect(audit.results).toContainEqual(expect.objectContaining({ event_type: "github_app.agent_command_feedback_recorded" }));
+    const stored = await env.DB.prepare("select vote, actor_kind from github_agent_command_feedback").all<{ vote: string; actor_kind: string }>();
+    expect(stored.results).toEqual([{ vote: "useful", actor_kind: "maintainer" }]);
+  });
+
   it("skips unsupported @loopover feedback reactions without storing votes", async () => {
     const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "maintainer" });
     await upsertAgentCommandAnswer(env, commandAnswer("answer-skip", "preflight", { responseCommentId: 9001 }));

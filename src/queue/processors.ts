@@ -163,6 +163,7 @@ import {
   isAiCostBearingCommand,
   isAuthorizedCommandActor,
   isLoopOverActionCommand,
+  isLoopOverMentionCommandName,
   isMaintainerQueueDigestCommand,
   parseAgentCommandFeedbackContext,
   parseLoopOverMentionCommand,
@@ -14521,9 +14522,10 @@ async function maybeProcessAgentCommandFeedbackReaction(
     });
     return true;
   }
-  const [answer, cachedPullRequest] = await Promise.all([
+  const [answer, cachedPullRequest, settings] = await Promise.all([
     getAgentCommandAnswer(env, feedback.answerId),
     getPullRequest(env, repoFullName, issue.number),
+    resolveRepositorySettings(env, repoFullName),
   ]);
   const command = answer?.command ?? feedback.command ?? "unknown";
   if (!answer) {
@@ -14586,6 +14588,15 @@ async function maybeProcessAgentCommandFeedbackReaction(
     repoFullName,
     pullRequestAuthor,
     officialAuthorDetection: official,
+    // Thread the feedback target's OWN command policy (matching every other command-authorization call site
+    // in this file) instead of letting isAuthorizedCommandActor fall back to the "preflight" default: a PR
+    // author authorized for a `chat` answer via the pr_author + commandRateLimitPolicy: "hold" path must not
+    // have their own +1/-1 vote denied with pr_author_not_confirmed_miner, and a repo's custom
+    // commandAuthorization override for the command must be honored for feedback voting too.
+    commandName: isLoopOverMentionCommandName(command) ? command : undefined,
+    commandAuthorizationPolicy: settings.commandAuthorization,
+    commandRateLimitPolicy: settings.commandRateLimitPolicy,
+    pullRequestOpenAndNotDraft: cachedPullRequest?.state === "open" && cachedPullRequest?.isDraft !== true,
   });
   if (!authorization.authorized) {
     await recordAuditEvent(env, {
@@ -14646,6 +14657,10 @@ async function authorizeFeedbackActor(
     installationId: number | null;
     pullRequestAuthor?: string | null | undefined;
     officialAuthorDetection?: OfficialGittensorMinerDetection | undefined;
+    commandName?: LoopOverMentionCommandName | undefined;
+    commandAuthorizationPolicy?: RepositoryCommandAuthorizationPolicy | null | undefined;
+    commandRateLimitPolicy?: "off" | "hold" | undefined;
+    pullRequestOpenAndNotDraft?: boolean | undefined;
   },
 ): Promise<{ authorized: boolean; reason: string; actorKind: "maintainer" | "author" }> {
   const [owner] = args.repoFullName.split("/");
@@ -14665,10 +14680,14 @@ async function authorizeFeedbackActor(
     };
   }
   const authorAuthorization = isAuthorizedCommandActor({
+    commandName: args.commandName,
     commenterLogin: args.actor,
     commenterAssociation: null,
     pullRequestAuthorLogin: args.pullRequestAuthor,
     officialAuthorDetection: args.officialAuthorDetection,
+    commandAuthorizationPolicy: args.commandAuthorizationPolicy,
+    commandRateLimitPolicy: args.commandRateLimitPolicy,
+    pullRequestOpenAndNotDraft: args.pullRequestOpenAndNotDraft,
   });
   return {
     authorized: authorAuthorization.authorized,

@@ -341,6 +341,14 @@ export function isMaintainerQueueDigestCommand(command: LoopOverMentionCommandNa
   return MAINTAINER_QUEUE_DIGEST_COMMANDS.has(command as MaintainerQueueDigestCommandName);
 }
 
+/** True when an arbitrary stored string (e.g. a persisted answer's `command`) is a real mention-command name,
+ *  so a caller can thread it through isAuthorizedCommandActor's `commandName` instead of falling back to the
+ *  `"preflight"` default. An unrecognized value (a legacy/"unknown" record) narrows to `undefined` at the call
+ *  site, preserving the prior default-policy behavior for those. */
+export function isLoopOverMentionCommandName(name: string): name is LoopOverMentionCommandName {
+  return COMMANDS.has(name as LoopOverMentionCommandName);
+}
+
 export function isMaintainerOnlyCommand(command: LoopOverMentionCommandName): boolean {
   return isMaintainerQueueDigestCommand(command);
 }
