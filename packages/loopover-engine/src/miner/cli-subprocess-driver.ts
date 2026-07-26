@@ -277,6 +277,21 @@ export function createCliSubprocessCodingAgentDriver(options: CliSubprocessDrive
       });
       const transcript = redactSecrets(spawned.stdout, knownSecrets).slice(0, MAX_TRANSCRIPT_CHARS);
 
+      // Cost/token usage is extracted ONCE up front and folded into every return below, not just the success
+      // path -- the CLI's JSON usage envelope is present "on every result, success or not" (see the code-0
+      // error-envelope comment below), so a failed-but-billed attempt (mid-session API error, non-zero exit,
+      // timeout) must report the spend it actually incurred. Symmetric with agent-sdk-driver.ts's failure
+      // branches, which already populate cost/tokens, and with attempt-metering.ts's budget ceiling, which
+      // silently undercounts when a billed failure reports `costUsd: undefined` (#8871). extractCliUsage/
+      // totalTokensFromUsage are best-effort: empty/non-JSON stdout (e.g. a stalled-no-output kill) yields an
+      // empty CliUsage, so `usageFields` is `{}` and nothing is fabricated.
+      const usage = extractCliUsage(spawned.stdout);
+      const tokensUsed = totalTokensFromUsage(usage);
+      const usageFields = {
+        ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+        ...(tokensUsed !== undefined ? { tokensUsed } : {}),
+      };
+
       if (spawned.timedOut && spawned.stalledNoOutput) {
         // Fast-fail path (#4994/#5053): killed at firstOutputTimeoutMs, well before the full timeoutMs, because
         // stdout produced no bytes at all. A distinct error (never reusing `${command}_timeout_...`) so this
@@ -287,6 +302,7 @@ export function createCliSubprocessCodingAgentDriver(options: CliSubprocessDrive
           changedFiles: [],
           summary: `${options.command} stalled with no stdout within ${options.firstOutputTimeoutMs}ms`,
           transcript,
+          ...usageFields,
           error: `${options.command}_stalled_no_output`,
         };
       }
@@ -296,6 +312,7 @@ export function createCliSubprocessCodingAgentDriver(options: CliSubprocessDrive
           changedFiles: [],
           summary: `${options.command} timed out after ${timeoutMs}ms`,
           transcript,
+          ...usageFields,
           error: `${options.command}_timeout_${timeoutMs}ms`,
         };
       }
@@ -308,6 +325,7 @@ export function createCliSubprocessCodingAgentDriver(options: CliSubprocessDrive
               changedFiles: [],
               summary: `${options.command} exited non-zero`,
               transcript,
+              ...usageFields,
               error: redactSecrets(`claude_code_error_${errStatus}`, knownSecrets),
             };
           }
@@ -324,6 +342,7 @@ export function createCliSubprocessCodingAgentDriver(options: CliSubprocessDrive
               changedFiles: [],
               summary: `${options.command} exited non-zero`,
               transcript,
+              ...usageFields,
               error: redactSecrets(
                 "codex_no_auth: auth.json missing or expired -- run `codex auth` to authenticate",
                 knownSecrets,
@@ -339,6 +358,7 @@ export function createCliSubprocessCodingAgentDriver(options: CliSubprocessDrive
               changedFiles: [],
               summary: `${options.command} exited non-zero`,
               transcript,
+              ...usageFields,
               error: `${options.command}_exit_${spawned.code}: ${detail}`,
             };
           }
@@ -350,6 +370,7 @@ export function createCliSubprocessCodingAgentDriver(options: CliSubprocessDrive
           changedFiles: [],
           summary: `${options.command} exited non-zero`,
           transcript,
+          ...usageFields,
           error: `${options.command}_exit_${spawned.code}: ${detail}`,
         };
       }
@@ -368,19 +389,17 @@ export function createCliSubprocessCodingAgentDriver(options: CliSubprocessDrive
             changedFiles: [],
             summary: `${options.command} exited 0 but reported an error envelope`,
             transcript,
+            ...usageFields,
             error: redactSecrets(`claude_code_error_${errStatus}`, knownSecrets),
           };
         }
       }
-      const usage = extractCliUsage(spawned.stdout);
-      const tokensUsed = totalTokensFromUsage(usage);
       return {
         ok: true,
         changedFiles: [],
         summary: `${options.command} completed for ${task.attemptId}`,
         transcript,
-        ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
-        ...(tokensUsed !== undefined ? { tokensUsed } : {}),
+        ...usageFields,
       };
     },
   };

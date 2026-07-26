@@ -246,3 +246,60 @@ describe("documented divergences, locked in explicitly", () => {
     expect(result.costUsd).toBe(0.15);
   });
 });
+
+// A failed-but-billed CLI attempt (a mid-session API error still costs real dollars) must report that spend on
+// EVERY failure path -- timeout, non-zero exit, code-0 error envelope -- exactly as the success path does, so
+// attempt-metering.ts's budget ceiling never undercounts. Symmetric with agent-sdk-driver.ts's failure branches,
+// which already populate cost/tokens (#8871).
+describe("CLI driver captures cost/token usage on failure paths (#8871)", () => {
+  // A single claude `--output-format json` result carrying both an error envelope AND real usage -- the JSON
+  // usage envelope is present "on every result, success or not", so a billed failure still exposes it.
+  const billedFailureStdout = JSON.stringify({
+    is_error: true,
+    api_error_status: "overloaded_error",
+    total_cost_usd: 0.42,
+    usage: { input_tokens: 800, output_tokens: 200 },
+  });
+
+  const claudeDriver = (spawnResult: {
+    stdout: string;
+    code: number | null;
+    stderr?: string;
+    timedOut?: boolean;
+  }) =>
+    createCliSubprocessCodingAgentDriver({
+      command: "claude",
+      spawn: async () => spawnResult,
+    });
+
+  it("captures cost/tokens on a non-zero-exit error envelope (a billed mid-session API failure)", async () => {
+    const result = await claudeDriver({ stdout: billedFailureStdout, code: 1 }).run(task);
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("claude_code_error_overloaded_error");
+    expect(result.costUsd).toBe(0.42);
+    expect(result.tokensUsed).toBe(1000);
+  });
+
+  it("captures cost/tokens on a code-0 error envelope (exit 0 but is_error, still billed)", async () => {
+    const result = await claudeDriver({ stdout: billedFailureStdout, code: 0 }).run(task);
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("claude_code_error_overloaded_error");
+    expect(result.costUsd).toBe(0.42);
+    expect(result.tokensUsed).toBe(1000);
+  });
+
+  it("captures cost/tokens on a wall-clock timeout that still emitted a billed JSON envelope", async () => {
+    const result = await claudeDriver({ stdout: billedFailureStdout, code: null, timedOut: true }).run(task);
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/^claude_timeout_/);
+    expect(result.costUsd).toBe(0.42);
+    expect(result.tokensUsed).toBe(1000);
+  });
+
+  it("leaves cost/tokens undefined (never fabricated) when a failure produced no parseable usage", async () => {
+    const result = await claudeDriver({ stdout: "", code: 1, stderr: "lint failed" }).run(task);
+    expect(result.ok).toBe(false);
+    expect(result.costUsd).toBeUndefined();
+    expect(result.tokensUsed).toBeUndefined();
+  });
+});
