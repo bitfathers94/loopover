@@ -256,7 +256,9 @@ function reclaimOrphanedAllocations(db: DatabaseSync, nowMs: number, maxLeaseMs:
 /**
  * Opens the local worktree allocator store. On startup reclaims orphaned active slots — any slot past its
  * `maxLeaseMs` age (the container-agnostic guarantee for fleet mode's shared store), plus, as a same-host fast
- * path, any slot whose owner pid is confirmed dead in THIS host's PID namespace.
+ * path, any slot whose owner pid is confirmed dead in THIS host's PID namespace. The same reclaim also runs at
+ * the start of every `acquire()` call (#8859), so a peer's mid-lease crash is swept promptly by any live worker
+ * rather than only when a worker restarts and reopens its allocator.
  */
 export function openWorktreeAllocator(options: {
   dbPath?: string;
@@ -326,6 +328,12 @@ export function openWorktreeAllocator(options: {
     processPid,
     hostId,
     acquire(attemptId, repoFullName) {
+      // Per-acquire orphan sweep (#8859): reclaimOrphanedAllocations otherwise runs only once, inside
+      // openWorktreeAllocator(). A long-lived fleet worker that opened its allocator hours ago and keeps
+      // calling acquire() never re-sweeps a peer that crashed mid-lease after open — only a process restart
+      // would. Mirror portfolio-queue-manager.ts's per-claim sweepStuckItems(...) call: reclaim with a fresh
+      // Date.now() on every invocation so a crashed peer's slot frees on the very next acquire, not at restart.
+      reclaimOrphanedAllocations(db, Date.now(), maxLeaseMs, hostId);
       const normalizedAttempt = normalizeAttemptId(attemptId);
       const normalizedRepo = normalizeRepoFullName(repoFullName);
       const existing = getByAttempt.get(normalizedAttempt) as WorktreeSlotRow | undefined;

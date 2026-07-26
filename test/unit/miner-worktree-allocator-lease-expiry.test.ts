@@ -95,8 +95,10 @@ describe("loopover-miner worktree allocator age-based orphan reclaim (#7085)", (
     const paths = tempPaths();
     seedActiveSlot(paths, { ownerPid: DEAD_PID, ownerHost: "container-A", allocatedAt: RECENT });
     const allocator = reopen(paths, { hostId: "container-B" });
+    // The open-time sweep (evaluated at the injected NOW_MS) leaves the recent foreign-host slot active. We can
+    // no longer probe capacity via acquire() here: the per-acquire sweep (#8859) uses a real Date.now(), against
+    // which this fixed 2026-07-17 RECENT stamp reads as long past-due — that age path is covered separately.
     expect(activeCount(allocator)).toBe(1);
-    expect(() => allocator.acquire("intruder", "acme/other")).toThrow("worktree_capacity_exceeded");
   });
 
   it("reclaims a stale slot whose foreign owner_pid collides with a live local pid (cross-container false-positive)", () => {
@@ -213,6 +215,60 @@ describe("loopover-miner worktree allocator age-based orphan reclaim (#7085)", (
     expect(activeCount(allocator)).toBe(0);
     // A successful acquire proves the column was added — markActive writes owner_host and would throw otherwise.
     expect(allocator.acquire("fresh", "acme/other").ownerHost).toBe("container-B");
+  });
+
+  it("reclaims a peer's orphaned allocation on the next acquire, without reopening the allocator (#8859)", () => {
+    // The long-lived-worker scenario: this worker opened its allocator once and keeps calling acquire(). A peer
+    // crashes mid-lease AFTER that open. Reclaim must happen on the next acquire() — never a reopen. Fill the
+    // single slot with a live lease, corrupt it into a same-host orphan (dead pid) via a separate connection,
+    // then prove the next acquire on the SAME allocator handle reclaims it and succeeds.
+    const paths = tempPaths();
+    const allocator = reopen(paths, { hostId: "container-B" });
+    allocator.acquire("worker-a", "acme/widgets");
+    expect(activeCount(allocator)).toBe(1);
+
+    const db = new DatabaseSync(paths.dbPath);
+    try {
+      db.prepare("UPDATE worktree_slots SET owner_pid = ? WHERE slot_index = 0").run(DEAD_PID);
+    } finally {
+      db.close();
+    }
+
+    // No fresh openWorktreeAllocator() — the per-acquire sweep must free the orphaned slot in place.
+    const reclaimed = allocator.acquire("worker-b", "acme/other");
+    expect(reclaimed.status).toBe("active");
+    expect(reclaimed.attemptId).toBe("worker-b");
+    expect(reclaimed.repoFullName).toBe("acme/other");
+    expect(activeCount(allocator)).toBe(1);
+  });
+
+  it("reclaims an age-expired peer allocation on the next acquire without a reopen (#8859)", () => {
+    // Same per-acquire guarantee via the container-agnostic age signal: a foreign-host lease whose deadline has
+    // passed is reclaimed by the next acquire on a still-open allocator, not only at restart. A 1ms lease makes
+    // any wall-clock elapsed since the seed write count as past-due against the real Date.now() acquire() uses.
+    const paths = tempPaths();
+    const allocator = reopen(paths, { hostId: "container-B", maxLeaseMs: 1 });
+
+    const db = new DatabaseSync(paths.dbPath);
+    try {
+      db.prepare(`
+        UPDATE worktree_slots
+        SET status = 'active',
+            attempt_id = 'crashed-peer',
+            repo_full_name = 'acme/widgets',
+            owner_pid = ?,
+            owner_host = 'container-A',
+            allocated_at = ?
+        WHERE slot_index = 0
+      `).run(process.pid, OLD);
+    } finally {
+      db.close();
+    }
+    expect(activeCount(allocator)).toBe(1);
+
+    const reclaimed = allocator.acquire("worker-b", "acme/other");
+    expect(reclaimed.status).toBe("active");
+    expect(activeCount(allocator)).toBe(1);
   });
 
   it("stamps the acquiring host and pid onto the allocation and clears them on release", () => {
