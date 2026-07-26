@@ -613,6 +613,26 @@ NOVELTY_BONUS_SCALAR = 3
     expect(refreshed.constants.MERGED_PR_BASE_SCORE).toBe(25); // the hardcoded default
   });
 
+  it("does not open a spurious drift report from a 200-garbage body when there is no last-good snapshot (#8902)", async () => {
+    const env = createTestEnv();
+    // A 200 body below the recognized-constants floor (so it never fails closed on a last-good, and there is
+    // none) that still contains a stray non-source identifier findUnmodeledUpstreamConstants would flag. Under
+    // the old `if (constantsResult.ok)` guard this garbage fed the drift sync and opened a bogus report.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("constants.py")) return new Response("<!DOCTYPE html>\nNOVELTY_BONUS_SCALAR = 3\n");
+      if (url.includes("programming_languages.json")) return Response.json({});
+      return new Response("not found", { status: 404 });
+    });
+
+    const refreshed = await refreshScoringModelSnapshot(env);
+
+    // The garbage body bootstrapped to fallback (no usable content) ...
+    expect(refreshed.sourceKind).toBe("fallback");
+    // ... and, critically, no drift report was opened from the garbage body.
+    expect(await listUpstreamDriftReports(env, 10)).toEqual([]);
+  });
+
   it("bootstraps to defaults (fallback) on a failed fetch ONLY when there is no verified last-good", async () => {
     const env = createTestEnv();
     vi.stubGlobal("fetch", async () => new Response("missing", { status: 404 }));

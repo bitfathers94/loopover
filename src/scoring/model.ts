@@ -134,7 +134,12 @@ export async function refreshScoringModelSnapshot(env: Env): Promise<ScoringMode
     },
   };
   await persistScoringModelSnapshot(env, snapshot);
-  if (constantsResult.ok) {
+  // Only feed drift detection a USABLE body. A 200-with-garbage body (recognizedCount below the sanity floor —
+  // HTML interstitial, LFS pointer, truncation) can still parse to stray non-source identifiers, so gating on
+  // `constantsResult.ok` alone let it open a spurious `upstream_drift_reports` row when no last-good snapshot
+  // existed to fail closed on. Mirror the fail-closed guard's `constantsUsable` content check (the `.ok`
+  // conjunct also narrows `constantsResult.value` below, as at the raw-github block above). (#8902)
+  if (constantsResult.ok && constantsUsable) {
     await syncUnmodeledScoringConstantDrift(env, {
       unmodeledConstants: findUnmodeledUpstreamConstants(constantsResult.value),
       source: { repo: upstream.repo, ref: fetchRef, commitSha: upstreamSourceSha },
