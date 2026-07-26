@@ -31,6 +31,9 @@ describe("operator dashboard payload", () => {
     // #2191: gate-eval report is surfaced read-only; with no review_audit signal it fails safe to an empty
     // report (no rows, no signal) rather than being absent.
     expect(payload.gateEval).toEqual({ rows: [], hasSignal: false });
+    // #8906: the per-(project, ruleCode) rule-gate breakdown is surfaced read-only alongside gateEval; with no
+    // review_audit signal it too fails safe to an empty report rather than being absent.
+    expect(payload.ruleGateEval).toEqual({ rows: [], hasSignal: false });
     expect(payload.cycleTime).toEqual({
       p50Ms: null,
       p90Ms: null,
@@ -247,7 +250,42 @@ describe("operator dashboard payload", () => {
     expect(payload.metrics).toEqual(
       expect.arrayContaining([expect.objectContaining({ label: "Rules below close-precision floor", value: "1", delta: "surface_lane_reject" })]),
     );
-    expect(JSON.stringify(payload)).not.toContain("missing_linked_issue"); // the healthy rule never appears
+    // The below-floor tile still names only the flagged rule, never the healthy one. (The healthy rule DOES now
+    // legitimately appear in the full per-(project, ruleCode) ruleGateEval report added in #8906 -- that finer
+    // breakdown is meant to show every rule, flagged or not -- so scope this leak check to the metrics tile.)
+    expect(JSON.stringify(payload.metrics)).not.toContain("missing_linked_issue");
+  });
+
+  it("surfaces the per-(project, ruleCode) rule-gate breakdown, not only the blended cross-repo tile (#8906)", async () => {
+    const env = createTestEnv();
+    const seedClose = async (project: string, id: string, ruleCode: string, truth: "closed" | "merged"): Promise<void> => {
+      await env.DB.prepare(
+        `INSERT INTO review_audit (id, project, target_id, event_type, decision, summary, source, created_at) VALUES (?, ?, ?, 'gate_decision', 'close', ?, 'gittensory-native', ?)`,
+      )
+        .bind(`gd-${id}`, project, `${project}#${id}`, ruleCode, new Date().toISOString())
+        .run();
+      await env.DB.prepare(
+        `INSERT INTO review_audit (id, project, target_id, event_type, decision, source, created_at) VALUES (?, ?, ?, 'pr_outcome', ?, 'github', ?)`,
+      )
+        .bind(`po-${id}`, project, `${project}#${id}`, truth, new Date().toISOString())
+        .run();
+    };
+    // The SAME rule fires on two different repos: broken on repo-a (every close later merged -> 0% precision),
+    // healthy on repo-b (every close stuck -> 100% precision). The blended view pools both repos into one
+    // ruleCode row and can't tell them apart; the finer-grained view keeps them as two separate per-project rows.
+    for (let i = 1; i <= 4; i++) await seedClose("owner/repo-a", `a-${i}`, "surface_lane_reject", "merged");
+    for (let i = 1; i <= 4; i++) await seedClose("owner/repo-b", `b-${i}`, "surface_lane_reject", "closed");
+
+    const payload = await buildOperatorDashboardPayload(env);
+    // The un-pooled report keeps one row per (project, ruleCode) -- the exact "which repo is this rule broken on"
+    // dimension the blended tile can't express.
+    const rows = payload.ruleGateEval.rows.filter((r) => r.ruleCode === "surface_lane_reject");
+    expect(rows.map((r) => r.project)).toEqual(["owner/repo-a", "owner/repo-b"]);
+    const repoA = rows.find((r) => r.project === "owner/repo-a")!;
+    const repoB = rows.find((r) => r.project === "owner/repo-b")!;
+    // Same rule, opposite realized close precision -- visible only because the rows are NOT pooled.
+    expect(repoA).toMatchObject({ wouldClose: 4, closeConfirmed: 0, closePrecision: 0 });
+    expect(repoB).toMatchObject({ wouldClose: 4, closeConfirmed: 4, closePrecision: 1 });
   });
 
   it("wires computeFindingAcceptance into the dashboard's acceptance card shape (#1967/#5213)", async () => {

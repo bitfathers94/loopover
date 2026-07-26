@@ -34,7 +34,7 @@ import { computeFleetAnalytics, getFleetHealthSummary, type FleetAnalytics, type
 import { computeAgentHealth, computeCalibration, type AgentHealth, type Calibration } from "../review/ops";
 import { computeGateEval, type GateEvalReport } from "../review/parity";
 import { computeContributorGateEval, contributorFairnessFlags, computeBlendedContributorGateEval, contributorGlobalFairnessFlags } from "../review/contributor-gate-eval";
-import { computeBlendedRuleGateEval, rulesBelowClosePrecisionFloor } from "../review/rule-gate-eval";
+import { computeBlendedRuleGateEval, computeRuleGateEval, rulesBelowClosePrecisionFloor, type RuleGateEvalReport } from "../review/rule-gate-eval";
 import { computeCycleTimeAggregate, computeFindingAcceptance, type CycleTimeAggregate } from "../review/stats";
 import { loadUpstreamStatus, type UpstreamStatus } from "../upstream/ruleset";
 import { nowIso } from "../utils/json";
@@ -84,6 +84,12 @@ export type OperatorDashboardPayload = {
   // Gate-precision eval (#2191): the per-project confusion matrix + precisions from computeGateEval, surfaced
   // read-only for the maintainer analytics card. Fail-safe empty report when there is no review_audit signal.
   gateEval: GateEvalReport;
+  // #8906: the per-(project, ruleCode) gate-accuracy breakdown from computeRuleGateEval -- the finer-grained
+  // "which rule is broken on which repo" view. The blended (ruleCode-only, cross-repo) counterpart already
+  // drives the "Rules below close-precision floor" tile via rulesBelowClosePrecisionFloor, but that pooled view
+  // can't tell an operator WHICH repo a rule is misfiring on; this exposes the un-pooled rows so it can. Same
+  // fail-safe-to-empty and fixed 90d window as gateEval above.
+  ruleGateEval: RuleGateEvalReport;
   // PR review cycle-time percentiles (#2194): gate decision → outcome from review_audit; fail-safe empty aggregate.
   cycleTime: CycleTimeAggregate;
   // Confidence-vs-outcome calibration curve (#2192): merge confidence bins + recommended floor from computeCalibration.
@@ -141,6 +147,7 @@ export async function buildOperatorDashboardPayload(
     contributorGateEval,
     blendedContributorGateEval,
     blendedRuleGateEval,
+    ruleGateEval,
     cycleTime,
     calibration,
     agentHealth,
@@ -176,6 +183,9 @@ export async function buildOperatorDashboardPayload(
     // isolates a single systematically-wrong deterministic rule even while its host project's own aggregate
     // still looks healthy. Fails safe to an empty report on any read error.
     computeBlendedRuleGateEval(env, { days: GATE_ANALYTICS_WINDOW_DAYS, nowMs: Date.now() }),
+    // #8906: the un-pooled per-(project, ruleCode) counterpart of the blended report above -- surfaces which
+    // specific repo a rule is misfiring on, not just that it misfires somewhere. Same window; fails safe to empty.
+    computeRuleGateEval(env, { days: GATE_ANALYTICS_WINDOW_DAYS, nowMs: Date.now() }),
     // #2194: cycle-time percentiles from the stats feed; fails safe to an empty aggregate.
     computeCycleTimeAggregate(env, { days: GATE_ANALYTICS_WINDOW_DAYS, nowMs: Date.now() }),
     computeCalibration(env, operatorAgentConfig(env)),
@@ -338,6 +348,7 @@ export async function buildOperatorDashboardPayload(
     upstreamDrift,
     fleetMetrics,
     gateEval,
+    ruleGateEval,
     cycleTime,
     calibration,
     agentHealth,
