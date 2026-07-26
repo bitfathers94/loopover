@@ -112,6 +112,31 @@ describe("resolvePortfolioQueueChatAction (#6520)", () => {
     });
   });
 
+  it("resolves a bare-integer identifier (no #/issue: prefix) for release and requeue", () => {
+    // Exercises IDENTIFIER_RE's third alternation group — a bare positive integer with no `#`/`issue:`
+    // prefix — which the #6520 cases above (`#7` / `issue:12`) never reach.
+    expect(resolvePortfolioQueueChatAction("release acme/widgets 12")).toEqual({
+      ok: true,
+      action: PORTFOLIO_QUEUE_CHAT_RELEASE_ACTION,
+      target: { repoFullName: "acme/widgets", identifier: "issue:12" },
+    });
+    expect(resolvePortfolioQueueChatAction("requeue acme/widgets 12")).toEqual({
+      ok: true,
+      action: PORTFOLIO_QUEUE_CHAT_REQUEUE_ACTION,
+      target: { repoFullName: "acme/widgets", identifier: "issue:12" },
+    });
+  });
+
+  it("does not misread a digit glued to a word (a version tag) as a bare-integer identifier", () => {
+    // The `2` in `v2` is guarded by IDENTIFIER_RE's negative lookbehind — it's a version tag, not an
+    // issue number — so the resolve falls back to a repo-only target rather than inventing `issue:2`.
+    expect(resolvePortfolioQueueChatAction("release acme/widgets v2")).toEqual({
+      ok: true,
+      action: PORTFOLIO_QUEUE_CHAT_RELEASE_ACTION,
+      target: { repoFullName: "acme/widgets" },
+    });
+  });
+
   it("rejects empty, action-less, dual-action, and repo-less text without guessing", () => {
     for (const text of [
       "",
