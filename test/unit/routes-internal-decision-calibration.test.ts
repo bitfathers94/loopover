@@ -85,3 +85,47 @@ describe("GET /v1/internal/calibration — operator calibration endpoint", () =>
     expect(((await res.json()) as { project: string }).project).toBe("loopover");
   });
 });
+
+describe("GET /v1/internal/status — operator health snapshot endpoint (#8904)", () => {
+  it("401s without the internal token (the /v1/internal/* middleware gate)", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    expect((await app.request("/v1/internal/status", {}, env)).status).toBe(401);
+    expect((await app.request("/v1/internal/status", { headers: { authorization: "Bearer nope" } }, env)).status).toBe(401);
+  });
+
+  it("200s with the health/verdict snapshot for a seeded target, scoped to the app slug", async () => {
+    const app = createApp();
+    const env = createTestEnv(); // GITHUB_APP_SLUG defaults to "loopover-orb"
+    // Seed one terminal target + its review-audit row so byStatus/byVerdict and recent[] are populated.
+    await env.DB.prepare(
+      `INSERT INTO review_targets (id, project, kind, repo, number, status, verdict, head_sha, decided_sha, attempt_count, terminal_at, decision_json)
+       VALUES (?, ?, 'pull_request', ?, ?, 'merged', 'merge', 'abc123', 'abc123', 1, '2026-07-01T00:00:00Z', ?)`,
+    )
+      .bind("loopover-orb:pull_request:owner/repo#7", "loopover-orb", "owner/repo", 7, JSON.stringify({ action: "merge", confidence: 0.9 }))
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO review_audit (id, project, target_id, event_type, decision, summary, created_at)
+       VALUES ('s1', 'loopover-orb', ?, 'reviewed', 'merge', 'looks good', '2026-07-01T00:00:00Z')`,
+    )
+      .bind("loopover-orb:pull_request:owner/repo#7")
+      .run();
+    const res = await app.request("/v1/internal/status", { headers: bearer(env) }, env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      project: string;
+      counts: { byStatus: Record<string, number>; byVerdict: Record<string, number> };
+      health: { manualRate: number; aiErrors: number; frozen: boolean; holdOnly: boolean; configIssues: string[] };
+      recent: Array<{ target: string; verdict: string | null; summary: string | null; at: string }>;
+    };
+    expect(body.project).toBe("loopover-orb");
+    expect(body.counts.byStatus.merged).toBe(1);
+    expect(body.counts.byVerdict.merge).toBe(1);
+    expect(body.health.aiErrors).toBe(0);
+    expect(body.health.frozen).toBe(false);
+    expect(body.health.holdOnly).toBe(false);
+    expect(body.recent.map((r) => r.target)).toContain("loopover-orb:pull_request:owner/repo#7");
+    // Privacy: aggregate review state only — never actor logins / trust internals.
+    expect(JSON.stringify(body)).not.toMatch(/login|actor|reward|payout|trust|wallet|hotkey/i);
+  });
+});
