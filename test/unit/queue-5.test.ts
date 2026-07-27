@@ -4288,14 +4288,14 @@ describe("queue processors", () => {
       prNumber: number,
       headSha: string,
       authorLogin = "contributor",
-      opts: { headRef?: string; e2eTestDelivery?: "comment" | "commit" } = {},
+      opts: { headRef?: string; e2eTestDelivery?: "comment" | "commit"; state?: "open" | "closed" } = {},
     ) {
       const slash = repoFullName.indexOf("/");
       const owner = repoFullName.slice(0, slash);
       const name = repoFullName.slice(slash + 1);
       await upsertRepositoryFromGitHub(env, { name, full_name: repoFullName, private: false, owner: { login: owner } }, 123);
       await upsertRepositorySettings(env, { repoFullName, autoLabelEnabled: false, requireLinkedIssue: false });
-      await upsertPullRequestFromGitHub(env, repoFullName, { number: prNumber, title: "Add retry to checkout", state: "open", user: { login: authorLogin }, author_association: "CONTRIBUTOR", head: { sha: headSha, ref: opts.headRef ?? "feature/checkout-retry" }, labels: [], body: "Retries the payment call once on a 5xx." });
+      await upsertPullRequestFromGitHub(env, repoFullName, { number: prNumber, title: "Add retry to checkout", state: opts.state ?? "open", user: { login: authorLogin }, author_association: "CONTRIBUTOR", head: { sha: headSha, ref: opts.headRef ?? "feature/checkout-retry" }, labels: [], body: "Retries the payment call once on a 5xx." });
       await upsertPullRequestFile(env, { repoFullName, pullNumber: prNumber, path: "src/checkout.ts", status: "modified", additions: 3, deletions: 0, changes: 3, payload: { patch: "+function retryPayment() {\n+  return true;\n+}" } });
       // A renamed-with-no-patch file (GitHub omits `patch` for pure renames) -- exercises the
       // payload?.patch-is-not-a-string branch in the files.map() that builds E2eTestGenChangedFile[].
@@ -4574,6 +4574,33 @@ describe("queue processors", () => {
 
       const skipped = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.e2e_tests_generation_skipped").first<{ detail: string }>();
       expect(skipped?.detail).toBe("cached_pr_missing");
+    });
+
+    // #9311: `@loopover generate-tests` stays invokable on a merged/closed PR, but the sibling retrigger
+    // checkbox already skips a non-open PR (#9020). The command must skip with the same "pr_not_open"
+    // outcome BEFORE spending any authorization/AI generation work.
+    it("skips with pr_not_open when the cached PR is closed, without spending an AI generation call (#9311)", async () => {
+      const repoFullName = "JSONbored/gen-tests-9311-closed";
+      const aiRun = vi.fn();
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run: aiRun } as unknown as Ai, LOOPOVER_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
+      await seedGenerateTestsPr(env, repoFullName, 9311, "gen-tests-9311-closed-sha", "contributor", { state: "closed" });
+      let posted = 0;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/comments") && method === "POST") { posted += 1; return Response.json({ id: 93110 }); }
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, generateTestsWebhook(repoFullName, 9311, "maintainer", { association: "MEMBER" }));
+
+      const skipped = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.e2e_tests_generation_skipped").first<{ detail: string }>();
+      expect(skipped?.detail).toBe("pr_not_open");
+      expect(aiRun).not.toHaveBeenCalled();
+      expect(posted).toBe(0);
+      const generated = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("github_app.e2e_tests_generation").first<{ n: number }>();
+      expect(generated?.n).toBe(0);
     });
 
     it("declines (returns false) for a non-command comment, claiming nothing", async () => {
@@ -5399,7 +5426,7 @@ describe("queue processors", () => {
       repoFullName: string,
       prNumber: number,
       headSha: string,
-      opts: { e2eTests?: boolean } = {},
+      opts: { e2eTests?: boolean; state?: "open" | "closed" } = {},
     ) {
       const slash = repoFullName.indexOf("/");
       const owner = repoFullName.slice(0, slash);
@@ -5414,7 +5441,7 @@ describe("queue processors", () => {
       await upsertPullRequestFromGitHub(env, repoFullName, {
         number: prNumber,
         title: "Add retry to checkout",
-        state: "open",
+        state: opts.state ?? "open",
         user: { login: "contributor" },
         author_association: "CONTRIBUTOR",
         head: { sha: headSha, ref: "feature/checkout-retry" },
@@ -5507,6 +5534,33 @@ describe("queue processors", () => {
       expect(audited?.outcome).toBe("completed");
       expect(audited?.actor).toBe("maintainer");
       expect(JSON.parse(audited?.metadata_json ?? "{}")).toMatchObject({ trigger: "checkbox" });
+    });
+
+    // #9311: the panel comment (and its interactive generate-tests checkbox) survives merge/close, so a
+    // post-merge click must skip with "pr_not_open" BEFORE any AI generation or commit-to-branch work --
+    // mirroring the sibling retrigger checkbox's #9020 guard.
+    it("skips with pr_not_open when a maintainer checks the box on a closed/merged PR, without generating (#9311)", async () => {
+      const repoFullName = "JSONbored/checkbox-9311-closed";
+      const aiRun = vi.fn();
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: aiRun } as unknown as Ai,
+        LOOPOVER_REVIEW_E2E_TESTS: "true",
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+      });
+      await seedCheckboxPr(env, repoFullName, 6099, "checkbox-9311-closed-sha", { state: "closed" });
+      const posted = { count: 0, body: "" };
+      stubCheckboxFetch(6099, "maintainer", "admin", posted);
+
+      await processJob(env, checkboxWebhook(repoFullName, 6099, 999, { login: "maintainer" }));
+
+      const skipped = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.e2e_tests_generation_skipped").first<{ detail: string }>();
+      expect(skipped?.detail).toBe("pr_not_open");
+      expect(aiRun).not.toHaveBeenCalled();
+      expect(posted.count).toBe(0);
+      const generated = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("github_app.e2e_tests_generation").first<{ n: number }>();
+      expect(generated?.n).toBe(0);
     });
 
     it("is a silent no-op when a non-maintainer checks the box — no comment posted, only a denial audit event", async () => {
