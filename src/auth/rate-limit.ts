@@ -263,7 +263,22 @@ async function peekWebhookInstallationId(c: Context<{ Bindings: Env }>): Promise
 }
 
 async function validateBearerForRateLimit(c: Context<{ Bindings: Env }>, token: string): Promise<boolean> {
-  return Boolean((await authenticatePrivateToken(c.env, token)) ?? (await authenticateInternalToken(c.env, token)));
+  try {
+    return Boolean((await authenticatePrivateToken(c.env, token)) ?? (await authenticateInternalToken(c.env, token)));
+  } catch (error) {
+    // Fail OPEN (#9223, same reasoning as checkRateLimitBucket's DO-fetch catch above): this is only the
+    // identity-CLASSIFICATION path -- which rate-limit bucket to count the request against -- and it runs
+    // from the `app.use("*", ...)` middleware ahead of every route handler, with no app.onError registered
+    // anywhere. authenticatePrivateToken bottoms out in a real D1/Drizzle read against auth_sessions; a
+    // transient hiccup there (an eviction, a driver error) previously escaped uncaught as Hono's bare,
+    // non-JSON 500 for whatever route the caller happened to be hitting -- indistinguishable from a real
+    // application bug in that route, and able to take down an otherwise-healthy, otherwise-correctly-
+    // authenticated request. The route's OWN authorization check re-validates independently downstream, so
+    // treating the token as unrecognized here (falling back to IP-keyed identity) is safe: it can only ever
+    // cost the caller its own per-identity bucket for this request, never access.
+    console.error(JSON.stringify({ level: "error", event: "rate_limit_bearer_identity_failed", message: error instanceof Error ? error.message : String(error) }));
+    return false;
+  }
 }
 
 const LOOPBACK_PEER_IPS = new Set(["127.0.0.1", "::1"]);

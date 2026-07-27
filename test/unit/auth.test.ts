@@ -253,6 +253,51 @@ describe("private-beta auth and rate limiting", () => {
     expect(observedKeys[0]).toMatch(/^normal:\/v1\/public\/github\/repos\/:owner\/:repo\/stats:ip:/);
   });
 
+  it("REGRESSION (#9223): fails OPEN (IP-keyed) instead of crashing the request when the bearer-identity DB read throws", async () => {
+    const observedKeys: string[] = [];
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // A DB binding whose read throws -- a transient D1 hiccup during the auth_sessions lookup that
+    // authenticatePrivateToken bottoms out in for a non-static token. Before #9223 this escaped the
+    // `app.use("*")` rate-limit middleware uncaught (no app.onError is registered anywhere) and surfaced as
+    // Hono's bare, non-JSON 500 for whatever route the caller happened to be hitting.
+    const throwingDb = {
+      prepare() {
+        throw new Error("transient D1 hiccup");
+      },
+    } as unknown as D1Database;
+    const env = rateLimitTestEnv({ DB: throwingDb }, observedKeys);
+
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/repos", { authorization: "Bearer some-session-looking-token", "cf-connecting-ip": "203.0.113.9" }), "normal"),
+    ).resolves.toBeNull();
+
+    // Fell back to IP-keying (the token was treated as unrecognized), never crashed and never reached the
+    // token bucket -- the route's own auth check re-validates independently downstream.
+    expect(observedKeys).toHaveLength(1);
+    expect(observedKeys[0]).toMatch(/^normal:\/v1\/repos:ip:/);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("rate_limit_bearer_identity_failed"));
+    errorSpy.mockRestore();
+  });
+
+  it("logs the raw thrown value when a NON-Error is raised during bearer-identity classification", async () => {
+    const observedKeys: string[] = [];
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const throwingDb = {
+      prepare() {
+        throw "d1-string-failure"; // eslint-disable-line no-throw-literal -- exercises the String(error) arm
+      },
+    } as unknown as D1Database;
+    const env = rateLimitTestEnv({ DB: throwingDb }, observedKeys);
+
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/repos", { authorization: "Bearer some-session-looking-token", "cf-connecting-ip": "203.0.113.9" }), "normal"),
+    ).resolves.toBeNull();
+
+    expect(observedKeys[0]).toMatch(/^normal:\/v1\/repos:ip:/);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("d1-string-failure"));
+    errorSpy.mockRestore();
+  });
+
   describe("clientIp trusted-proxy behavior (#9044 -- self-host behind a Cloudflare Tunnel to a plain Node process)", () => {
     it("byte-identical to before when no peer IP is threaded in (Cloudflare Workers, or an unwired self-host build): still trusts cf-connecting-ip", async () => {
       const observedKeys: string[] = [];
