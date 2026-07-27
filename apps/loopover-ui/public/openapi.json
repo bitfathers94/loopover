@@ -16159,6 +16159,52 @@
             "type": "boolean"
           }
         }
+      },
+      "ContributorWatchesResponse": {
+        "type": "object",
+        "properties": {
+          "watching": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "repoFullName": {
+                  "type": "string"
+                },
+                "labels": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "repoFullName",
+                "labels"
+              ]
+            }
+          },
+          "changed": {
+            "type": "string"
+          }
+        }
+      },
+      "ContributorWatchRequest": {
+        "type": "object",
+        "properties": {
+          "repoFullName": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "repoFullName"
+        ]
       }
     },
     "parameters": {},
@@ -21908,6 +21954,137 @@
           },
           "403": {
             "description": "Insufficient role"
+          }
+        },
+        "security": [
+          {
+            "LoopOverBearer": []
+          },
+          {
+            "LoopOverSessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/contributors/{login}/watches": {
+      "get": {
+        "summary": "List contributor issue-watch subscriptions",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "login",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The contributor's self-scoped issue-watch subscriptions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContributorWatchesResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "LoopOverBearer": []
+          },
+          {
+            "LoopOverSessionCookie": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "Watch a repository for the contributor",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "login",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContributorWatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Adds/updates the watch subscription and returns the updated list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContributorWatchesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid watch request body"
+          },
+          "403": {
+            "description": "Repository is not watchable for this contributor"
+          }
+        },
+        "security": [
+          {
+            "LoopOverBearer": []
+          },
+          {
+            "LoopOverSessionCookie": []
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Unwatch a repository for the contributor",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "login",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContributorWatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Removes the watch subscription and returns the updated list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContributorWatchesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid watch request body"
+          },
+          "403": {
+            "description": "Repository is not watchable for this contributor"
           }
         },
         "security": [

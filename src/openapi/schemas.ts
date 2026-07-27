@@ -539,6 +539,23 @@ export const NotificationsMarkedSchema = z
   })
   .openapi("NotificationsMarked");
 
+// #9306: mirror of watchIssuesOutputSchema (src/mcp/server.ts) — response of the
+// /v1/contributors/{login}/watches GET/POST/DELETE verb-split of loopover_watch_issues.
+export const ContributorWatchesResponseSchema = z
+  .object({
+    watching: z.array(z.object({ repoFullName: z.string(), labels: z.array(z.string()) })).optional(),
+    changed: z.string().optional(),
+  })
+  .openapi("ContributorWatchesResponse");
+
+// #9306: body of POST/DELETE /v1/contributors/{login}/watches (mirrors watchSubscriptionBodySchema in src/api/routes.ts).
+export const ContributorWatchRequestSchema = z
+  .object({
+    repoFullName: z.string(),
+    labels: z.array(z.string()).optional(),
+  })
+  .openapi("ContributorWatchRequest");
+
 export const ContributorOpportunitySchema = z
   .object({
     repoFullName: z.string(),

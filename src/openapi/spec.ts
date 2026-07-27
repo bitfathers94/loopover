@@ -27,6 +27,8 @@ import {
   ContributorPrOutcomesSchema,
   NotificationFeedSchema,
   NotificationsMarkedSchema,
+  ContributorWatchesResponseSchema,
+  ContributorWatchRequestSchema,
   ContributorRewardRiskStrategySchema,
   ContributorProfileSchema,
   ContributorScoringProfileSchema,
@@ -145,6 +147,8 @@ export function buildOpenApiSpec() {
   registry.register("ConfigQuality", ConfigQualitySchema);
   registry.register("LabelAudit", LabelAuditSchema);
   registry.register("ContributorProfile", ContributorProfileSchema);
+  registry.register("ContributorWatchesResponse", ContributorWatchesResponseSchema);
+  registry.register("ContributorWatchRequest", ContributorWatchRequestSchema);
   registry.register("ContributorOpportunity", ContributorOpportunitySchema);
   registry.register("ContributorOpportunitiesResponse", ContributorOpportunitiesResponseSchema);
   registry.register("ContributorFit", ContributorFitSchema);
@@ -1329,6 +1333,56 @@ export function buildOpenApiSpec() {
         content: { "application/json": { schema: NotificationsMarkedSchema } },
       },
       400: { description: "Invalid mark-read body" },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/contributors/{login}/watches",
+    summary: "List contributor issue-watch subscriptions",
+    request: { params: z.object({ login: z.string() }) },
+    responses: {
+      200: {
+        description: "The contributor's self-scoped issue-watch subscriptions.",
+        content: { "application/json": { schema: ContributorWatchesResponseSchema } },
+      },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/contributors/{login}/watches",
+    summary: "Watch a repository for the contributor",
+    request: {
+      params: z.object({ login: z.string() }),
+      body: {
+        content: { "application/json": { schema: ContributorWatchRequestSchema } },
+      },
+    },
+    responses: {
+      200: {
+        description: "Adds/updates the watch subscription and returns the updated list.",
+        content: { "application/json": { schema: ContributorWatchesResponseSchema } },
+      },
+      400: { description: "Invalid watch request body" },
+      403: { description: "Repository is not watchable for this contributor" },
+    },
+  });
+  registry.registerPath({
+    method: "delete",
+    path: "/v1/contributors/{login}/watches",
+    summary: "Unwatch a repository for the contributor",
+    request: {
+      params: z.object({ login: z.string() }),
+      body: {
+        content: { "application/json": { schema: ContributorWatchRequestSchema } },
+      },
+    },
+    responses: {
+      200: {
+        description: "Removes the watch subscription and returns the updated list.",
+        content: { "application/json": { schema: ContributorWatchesResponseSchema } },
+      },
+      400: { description: "Invalid watch request body" },
+      403: { description: "Repository is not watchable for this contributor" },
     },
   });
   registry.registerPath({

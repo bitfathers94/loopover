@@ -21,6 +21,7 @@ import {
   gatePrecisionOutputSchema,
   maintainerMeasurementReportOutputSchema,
   activationPreviewOutputSchema,
+  watchIssuesOutputSchema,
 } from "../../src/mcp/server";
 
 describe("OpenAPI contract", () => {
@@ -200,6 +201,31 @@ describe("OpenAPI contract", () => {
       | { properties?: Record<string, unknown> }
       | undefined;
     expect(Object.keys(clearSchema?.properties ?? {}).sort()).toEqual(["cleared", "repoFullName"]);
+  });
+
+  // #9306: the /v1/contributors/{login}/watches GET/POST/DELETE verb-split of loopover_watch_issues was live but
+  // undocumented. Assert all three verbs are registered, the mutating verbs take the request-body schema, every
+  // response references the watches response schema, and its keys match the MCP tool's watchIssuesOutputSchema.
+  it("documents the contributor watches routes with a response schema matching the MCP tool shape (#9306)", () => {
+    const spec = buildOpenApiSpec();
+    const watchesPath = spec.paths["/v1/contributors/{login}/watches"];
+    expect(watchesPath?.get).toBeDefined();
+    expect(watchesPath?.post).toBeDefined();
+    expect(watchesPath?.delete).toBeDefined();
+
+    const responseRef = { $ref: "#/components/schemas/ContributorWatchesResponse" };
+    expect(watchesPath?.get?.responses?.["200"]?.content?.["application/json"]?.schema).toEqual(responseRef);
+    expect(watchesPath?.post?.responses?.["200"]?.content?.["application/json"]?.schema).toEqual(responseRef);
+    expect(watchesPath?.delete?.responses?.["200"]?.content?.["application/json"]?.schema).toEqual(responseRef);
+
+    const requestRef = { $ref: "#/components/schemas/ContributorWatchRequest" };
+    expect(watchesPath?.post?.requestBody?.content?.["application/json"]?.schema).toEqual(requestRef);
+    expect(watchesPath?.delete?.requestBody?.content?.["application/json"]?.schema).toEqual(requestRef);
+
+    const responseSchema = spec.components?.schemas?.ContributorWatchesResponse as
+      | { properties?: Record<string, unknown> }
+      | undefined;
+    expect(Object.keys(responseSchema?.properties ?? {}).sort()).toEqual(Object.keys(watchIssuesOutputSchema).sort());
   });
 
   // #9307: the three agent/pending-actions approval-queue routes were undocumented while their agent/audit-feed
