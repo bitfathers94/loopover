@@ -25,6 +25,9 @@ export type ReviewRiskExplanation = {
  * Review-risk explanation for a planned PR — shared by `loopover_explain_review_risk`
  * and `POST /v1/preflight/review-risk`. Uses the same `buildPreflightResult` core as
  * PR preflight (without issueQuality) plus optional per-contributor role context.
+ *
+ * The 5-way `recommendation` ladder below has direct branch coverage in
+ * `test/unit/review-risk.test.ts` (independent of the route-parity checks).
  */
 export function buildReviewRiskExplanation(args: {
   input: PreflightInput;
