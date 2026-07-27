@@ -71,6 +71,8 @@ export async function refreshRegistry(env: Env): Promise<RegistrySnapshot> {
         warnings.push(`Registry probe failed: ${url} (${errorMessage(error)})`);
       }
     }
+    // Every candidate (all API_CANDIDATES plus the raw-GitHub fallback) failed: fall through to the
+    // catch below, which records this run as status "error" with the accumulated per-source warnings.
     throw new Error("No registry source returned usable data.");
   } catch (error) {
     await db

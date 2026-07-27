@@ -423,4 +423,30 @@ describe("registry normalization", () => {
     expect(snapshot.warnings.length).toBeGreaterThan(0);
     expect(snapshot.repositories[0]?.repo).toBe("JSONbored/loopover");
   });
+
+  it("marks the sync run errored and rethrows when every registry source fails", async () => {
+    // Fail every candidate: mirror.gittensor.io API probes and the raw-GitHub fallback throw
+    // (the `errorMessage(error)` warning branch), the remaining API probes answer non-OK (the
+    // `response.status` warning branch) -- so both `warnings.push` arms inside the loop are hit.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("raw.githubusercontent.com")) {
+        throw new Error("raw fallback network failure");
+      }
+      if (url.includes("mirror.gittensor.io")) {
+        throw new Error("api connection reset");
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const env = createTestEnv();
+    await expect(refreshRegistry(env)).rejects.toThrow("No registry source returned usable data.");
+
+    const row = await env.DB.prepare("SELECT status, warnings_json FROM sync_runs").first<{ status: string; warnings_json: string }>();
+    expect(row?.status).toBe("error");
+    const warnings = JSON.parse(row?.warnings_json ?? "[]") as string[];
+    // One warning per failed candidate: all 6 API_CANDIDATES + the GITTENSOR_REGISTRY_URL fallback.
+    expect(warnings).toHaveLength(7);
+    expect(warnings).toEqual(expect.arrayContaining([expect.stringContaining("(404)"), expect.stringContaining("raw fallback network failure"), expect.stringContaining("api connection reset")]));
+  });
 });
