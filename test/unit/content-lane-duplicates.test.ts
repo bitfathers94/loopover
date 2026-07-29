@@ -349,6 +349,78 @@ describe("findDuplicateFrontmatterKeys — block-scalar + sequence skipping", ()
   });
 });
 
+describe("parseSimpleFrontmatter — zero-indent sequences (#9664)", () => {
+  it("captures a zero-indent block sequence value (js-yaml/gray-matter accept it)", () => {
+    const src = [
+      "---",
+      "author:",
+      "- Alice",
+      "downloadUrl:",
+      "- https://good.example/x.zip",
+      "---",
+      "",
+      "body",
+    ].join("\n");
+    // Before #9664 the sequence loop only consumed whitespace-led lines, so a zero-indent `- item`
+    // was dropped and BOTH fields parsed to "" — hiding a protected-field edit from the gates.
+    expect(parseSimpleFrontmatter(src)).toEqual({
+      author: "Alice",
+      downloadUrl: "https://good.example/x.zip",
+    });
+  });
+
+  it("still parses an INDENTED sequence value (whitespace-led arm unchanged)", () => {
+    const src = ["---", "author:", "  - Alice", "  - Bob", "---", "", "body"].join("\n");
+    expect(parseSimpleFrontmatter(src).author).toBe("Alice, Bob");
+  });
+
+  it("terminates a zero-indent sequence at the next top-level key (key not swallowed)", () => {
+    const src = ["---", "author:", "- Alice", "title: Real Title", "---", "", "body"].join("\n");
+    const f = parseSimpleFrontmatter(src);
+    expect(f.author).toBe("Alice");
+    expect(f.title).toBe("Real Title");
+  });
+
+  it("terminates a zero-indent sequence at a blank line", () => {
+    const src = ["---", "author:", "- Alice", "", "title: Real Title", "---", "", "body"].join("\n");
+    const f = parseSimpleFrontmatter(src);
+    expect(f.author).toBe("Alice");
+    expect(f.title).toBe("Real Title");
+  });
+});
+
+describe("protectedFrontmatterChanges — zero-indent sequence bypass (#9664)", () => {
+  it("flags a changed author authored as a zero-indent sequence", () => {
+    const before = ["---", "title: T", "slug: a", "author:", "- Alice", "---", "", "body"].join("\n");
+    const after = ["---", "title: T", "slug: a", "author:", "- Mallory", "---", "", "body"].join("\n");
+    // Before #9664 both parsed author to "", so normalizeProtectedValue("") === normalizeProtectedValue("")
+    // and the swapped author produced NO protected close — the exact bypass the doc comment forbids.
+    expect(protectedFrontmatterChanges(before, after)).toEqual(["author"]);
+  });
+});
+
+describe("findDuplicateFrontmatterKeys — zero-indent sequence skipping (#9664)", () => {
+  it("returns [] for two distinct keys each carrying a zero-indent sequence (no false dupe)", () => {
+    const src = [
+      "---",
+      "author:",
+      "- Alice",
+      "downloadUrl:",
+      "- https://good.example/x.zip",
+      "---",
+      "",
+      "body",
+    ].join("\n");
+    // The zero-indent `- item` lines must be skipped, not mistaken for top-level keys.
+    expect(findDuplicateFrontmatterKeys(src)).toEqual([]);
+  });
+
+  it("still catches a real duplicate key that follows a zero-indent sequence", () => {
+    const src = ["---", "author:", "- Alice", "slug: a", "slug: b", "---", "", "body"].join("\n");
+    expect(findDuplicateFrontmatterKeys(src)).toEqual(["slug"]);
+  });
+});
+
 describe("normalizeUrl edge cases (via extractContentDuplicateSignals)", () => {
   it("strips tracking/affiliate query params from a candidate URL (lines 243-251)", () => {
     const sig = extractContentDuplicateSignals({

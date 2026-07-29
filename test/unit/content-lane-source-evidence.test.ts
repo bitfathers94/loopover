@@ -335,6 +335,33 @@ describe("extractSubmittedSourceUrls — frontmatter parsing edge cases", () => 
     );
   });
 
+  it("captures a scalar-only source field authored as a ZERO-INDENT YAML sequence (#9664)", () => {
+    // The #8016 sequence branch consumed only whitespace-led lines, so a zero-indent `- item` (valid YAML
+    // js-yaml/gray-matter accept) was dropped and the field's URL was never fetched/verified at all.
+    const src = ["---", "documentationUrl:", "- https://docs.acme.example/guide", "---", "", "body"].join("\n");
+    const urls = extractSubmittedSourceUrls(src);
+    expect(urls.map((u) => `${u.field}:${u.url}`)).toContain(
+      "documentationUrl:https://docs.acme.example/guide",
+    );
+  });
+
+  it("terminates a zero-indent source-field sequence at the next top-level key (#9664)", () => {
+    const src = [
+      "---",
+      "documentationUrl:",
+      "- https://docs.acme.example/guide",
+      "websiteUrl: https://home.acme.example/",
+      "---",
+      "",
+      "body",
+    ].join("\n");
+    const urls = extractSubmittedSourceUrls(src);
+    // The zero-indent item is captured AND the following key's scalar value is parsed, not swallowed.
+    const rendered = urls.map((u) => `${u.field}:${u.url}`);
+    expect(rendered).toContain("documentationUrl:https://docs.acme.example/guide");
+    expect(rendered).toContain("websiteUrl:https://home.acme.example/");
+  });
+
   it("does not surface any block-scalar header on a list field as a bogus URL (both indicator orders)", () => {
     // `retrievalSources` is a list field; a block-scalar header is not a URL. The old guard only skipped the bare
     // `|`/`>`, so `|-` leaked as the literal url "|-". YAML allows chomping and the indentation digit in EITHER

@@ -54,6 +54,15 @@ function isBlockScalarHeader(raw: string): boolean {
   return BLOCK_SCALAR_INDICATOR.test(stripYamlComment(raw));
 }
 
+// A frontmatter block/flow sequence (or nested map) continues on any indented line OR any `- item` at
+// ANY indentation — including zero (`- Alice` in column 0 is valid YAML that js-yaml/gray-matter accept).
+// It ends at the next top-level key (which starts with a letter, so never `-` or whitespace) or a blank
+// line, so a zero-indent list can't be dropped — dropping it would let a protected-field edit hide (#9664).
+function isSequenceContinuationLine(line: string): boolean {
+  if (line.trim() === "") return false;
+  return /^\s/.test(line) || line.startsWith("-");
+}
+
 function unquoteYamlScalar(value: string): string {
   const trimmed = value.trim();
   if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
@@ -99,10 +108,10 @@ export function parseSimpleFrontmatter(source: string): Record<string, string> {
       }
       fields[key] = block.join(inline.startsWith(">") ? " " : "\n").trim();
     } else if (inline === "") {
-      // Block/flow sequence or nested map on the following indented lines.
+      // Block/flow sequence or nested map on the following lines (indented, or a zero-indent `- item`).
       const items: string[] = [];
-      /* v8 ignore next -- noUncheckedIndexedAccess fallback: the second lines[i] reuses the same in-bounds index already validated by /^\s/.test above */
-      while (i < lines.length && /^\s/.test(lines[i] ?? "") && (lines[i] ?? "").trim() !== "") {
+      /* v8 ignore next -- noUncheckedIndexedAccess fallback: i < lines.length guards the index; split() elements are always strings, so the `?? ""` nullish arm cannot fire */
+      while (i < lines.length && isSequenceContinuationLine(lines[i] ?? "")) {
         /* v8 ignore next -- noUncheckedIndexedAccess fallback: loop guard keeps i in bounds; split() elements are always strings */
         items.push((lines[i] ?? "").replace(/^\s*-\s*/, "").trim());
         i += 1;
@@ -147,8 +156,8 @@ export function findDuplicateFrontmatterKeys(source: string): string[] {
       /* v8 ignore next -- noUncheckedIndexedAccess fallback: i < lines.length guards the index; split() elements are always strings */
       while (i < lines.length && ((lines[i] ?? "").trim() === "" || /^\s/.test(lines[i] ?? ""))) i += 1;
     } else if (inline === "") {
-      /* v8 ignore next -- noUncheckedIndexedAccess fallback: the second lines[i] reuses the same in-bounds index already validated by /^\s/.test */
-      while (i < lines.length && /^\s/.test(lines[i] ?? "") && (lines[i] ?? "").trim() !== "") i += 1;
+      /* v8 ignore next -- noUncheckedIndexedAccess fallback: i < lines.length guards the index; split() elements are always strings, so the `?? ""` nullish arm cannot fire */
+      while (i < lines.length && isSequenceContinuationLine(lines[i] ?? "")) i += 1;
     }
   }
   return [...dupes];

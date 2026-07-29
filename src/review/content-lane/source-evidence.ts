@@ -126,6 +126,15 @@ function isBlockScalarHeader(raw: string): boolean {
   return BLOCK_SCALAR_INDICATOR.test(stripYamlComment(raw));
 }
 
+// A frontmatter block/flow sequence (or nested map) continues on any indented line OR any `- item` at
+// ANY indentation — including zero (`- Alice` in column 0 is valid YAML that js-yaml/gray-matter accept).
+// It ends at the next top-level key (which starts with a letter, so never `-` or whitespace) or a blank
+// line, so a zero-indent list can't be dropped — dropping it would hide the field's URLs from this gate (#9664).
+function isSequenceContinuationLine(line: string): boolean {
+  if (line.trim() === "") return false;
+  return /^\s/.test(line) || line.startsWith("-");
+}
+
 // Local frontmatter parser (scalar source-field reader; block-scalar aware so a URL written as a
 // block scalar is still SEEN by the source-reachability gate).
 function parseSimpleFrontmatter(source: string): Record<string, string> {
@@ -163,14 +172,14 @@ function parseSimpleFrontmatter(source: string): Record<string, string> {
       }
       fields[key] = block.join(inline.startsWith(">") ? " " : "\n").trim();
     } else if (inline === "") {
-      // Block/flow sequence (or nested map) on the following indented lines: gather each `- item` so a
-      // scalar-only field authored as a YAML sequence is still captured, matching duplicates.ts's parser
-      // (#8016; this branch existed only there, so such a field was invisible to the source-evidence gate).
+      // Block/flow sequence (or nested map) on the following lines (indented, or a zero-indent `- item`):
+      // gather each `- item` so a scalar-only field authored as a YAML sequence is still captured, matching
+      // duplicates.ts's parser (#8016 ported the branch here; #9664 widened it to the zero-indent form).
       const items: string[] = [];
       // `lines[i]` is bounded by the `i < lines.length` loop guard; the `?? ""` is an unreachable
       // noUncheckedIndexedAccess fallback (same guard as the block-scalar loop above).
       /* v8 ignore next */
-      while (i < lines.length && /^\s/.test(lines[i] ?? "") && (lines[i] ?? "").trim() !== "") {
+      while (i < lines.length && isSequenceContinuationLine(lines[i] ?? "")) {
         // `lines[i]` reuses the same in-bounds index already validated by `/^\s/.test` above; `?? ""`
         // cannot fire (unreachable noUncheckedIndexedAccess fallback).
         /* v8 ignore next */
