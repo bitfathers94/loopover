@@ -1097,8 +1097,12 @@ export async function runAttempt(args: string[], options: RunAttemptOptions = {}
     // the worktree to postmortem -- those are the cases that default to `true` (nothing to retain), matching
     // cleanupAttemptWorktree's own retention policy (a failed REAL attempt is what gets retained).
     if (worktreeResult?.ok) {
-      const cleanupWorktree = options.cleanupAttemptWorktree ?? cleanupAttemptWorktree;
-      await cleanupWorktree(worktreeResult.repoPath, worktreeResult.worktreePath, worktreeResult.attemptOk ?? true);
+      try {
+        const cleanupWorktree = options.cleanupAttemptWorktree ?? cleanupAttemptWorktree;
+        await cleanupWorktree(worktreeResult.repoPath, worktreeResult.worktreePath, worktreeResult.attemptOk ?? true);
+      } catch (error) {
+        captureMinerError(error, { kind: "attempt_worktree_cleanup_failed", repoFullName: parsed.repoFullName, attemptId });
+      }
     }
     // Every terminal outcome past the claim point (submitted/abandon/stale/blocked/governed, or an
     // unexpected throw) releases the soft-claim -- a claim that outlives its own attempt process would
@@ -1108,8 +1112,12 @@ export async function runAttempt(args: string[], options: RunAttemptOptions = {}
     // the initial claim submission actually ran (claimRecord is only set once claimedIssue is), so a run that
     // never reached the claim point (e.g. blocked_max_concurrent_claims) has nothing to release remotely.
     if (claimedIssue && claimRecord && isDiscoveryPlaneEnabled(env)) {
-      const submitClaim = options.submitSoftClaim ?? submitSoftClaim;
-      await submitClaim({ ...claimRecord, status: "released" } as Parameters<typeof SubmitSoftClaimFn>[0], { env });
+      try {
+        const submitClaim = options.submitSoftClaim ?? submitSoftClaim;
+        await submitClaim({ ...claimRecord, status: "released" } as Parameters<typeof SubmitSoftClaimFn>[0], { env });
+      } catch (error) {
+        captureMinerError(error, { kind: "attempt_hosted_claim_release_failed", repoFullName: parsed.repoFullName, attemptId });
+      }
     }
     if (allocation && allocator) allocator.release(attemptId);
     // #7858: discard the disposable DB fork on every terminal outcome, mirroring the worktree release above.
