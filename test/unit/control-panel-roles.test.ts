@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { __controlPanelRolesInternals, buildControlPanelAccessScope, buildControlPanelRoleSummary, loadControlPanelRoleSummary } from "../../src/services/control-panel-roles";
+import { PUBLIC_TOKEN_SAMPLES } from "../helpers/public-token-samples";
 import type { InstallationRecord, PullRequestRecord, RepositoryRecord } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
 
@@ -78,6 +79,18 @@ describe("control panel role summaries", () => {
     // Already-covered roots stay redacted (no regression).
     expect(sanitizeRoleText("see /Users/me/repo")).toBe("see <redacted-path>");
     expect(sanitizeRoleText("see C:\\Users\\me\\repo")).toBe("see <redacted-path>");
+  });
+
+  it.each(PUBLIC_TOKEN_SAMPLES)("redacts every token prefix in PUBLIC_TOKEN_INLINE (#9697): %s", (token) => {
+    // gho_/ghu_/ghs_/ghr_ (installation/OAuth/user/refresh) and xoxb- were missed by this surface's old
+    // ghp_-only list; all prefixes now redact from the one shared source.
+    const { sanitizeRoleText } = __controlPanelRolesInternals;
+    expect(sanitizeRoleText(`leak ${token} here`)).toBe("leak <redacted-token> here");
+  });
+
+  it("leaves a non-token role summary unmodified (#9697)", () => {
+    const { sanitizeRoleText } = __controlPanelRolesInternals;
+    expect(sanitizeRoleText("owner of three active repositories")).toBe("owner of three active repositories");
   });
 
   it("recognizes account installations even before an owned repo is cached", () => {

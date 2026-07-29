@@ -1,5 +1,5 @@
 import type { AgentActionBlockerCategory, AgentActionExplanationCard, AgentActionRecord } from "../types";
-import { PUBLIC_LOCAL_PATH_INLINE } from "../signals/redaction";
+import { PUBLIC_LOCAL_PATH_INLINE, PUBLIC_TOKEN_INLINE } from "../signals/redaction";
 
 type AgentActionExplanationInput = Pick<
   AgentActionRecord,
@@ -10,9 +10,11 @@ const BLOCKER_CATEGORY_ORDER: AgentActionBlockerCategory[] = ["branch", "account
 const PUBLIC_FORBIDDEN_PATTERN =
   /\b(wallets?|hotkeys?|coldkeys?|seed phrases?|mnemonics?|private keys?|raw[-_\s]?trust scores?|trust scores?|private reviewability|reviewability internals?|private scoreability|scoreability|projected scores?|score(?:d|s|ability)?|public score estimates?|estimated scores?|score estimates?|score previews?|reward estimates?|payouts?|farming|reward optimization|private rankings?)\b/gi;
 const PUBLIC_SCORE_DELTA_PATTERN = /\b(?:projected\s+)?score\w*(?:\s+\w+){0,4}\s+[-+]?\d+(?:\.\d+)?\s*->\s*[-+]?\d+(?:\.\d+)?\b/gi;
-// Token alternatives stay local; the local-path alternatives compose from the canonical PUBLIC_LOCAL_PATH_INLINE
-// in redaction.ts (adds the previously-missed /root/ and /var/, plus the forward-slash Windows form C:/Users/).
-const TOKEN_OR_PATH_PATTERN = new RegExp(`\\bgithub_pat_[A-Za-z0-9_]+|\\bgh[pousr]_[A-Za-z0-9_]+|(?:${PUBLIC_LOCAL_PATH_INLINE})\\S+`, "gi");
+// Both the token and local-path alternatives compose from the canonical inline sources in redaction.ts
+// (PUBLIC_TOKEN_INLINE covers the full GitHub/GitLab/Slack/OpenAI/LoopOver token-prefix union, previously
+// missed here; PUBLIC_LOCAL_PATH_INLINE the /root/, /var/, and forward-slash Windows form C:/Users/) so this
+// surface cannot drift.
+const TOKEN_OR_PATH_PATTERN = new RegExp(`\\b(?:${PUBLIC_TOKEN_INLINE})[A-Za-z0-9_]+|(?:${PUBLIC_LOCAL_PATH_INLINE})\\S+`, "gi");
 
 export function withAgentActionExplanationCard(action: AgentActionRecord): AgentActionRecord {
   return { ...action, explanationCard: buildAgentActionExplanationCard(action) };
@@ -137,3 +139,5 @@ function compactText(value: string): string {
   // public-safe card text. Drop a dangling high surrogate so truncation never splits a pair.
   return /[\uD800-\uDBFF]$/.test(compact) ? compact.slice(0, -1) : compact;
 }
+
+export const __agentActionExplanationCardInternals = { sanitizePublicCardText };

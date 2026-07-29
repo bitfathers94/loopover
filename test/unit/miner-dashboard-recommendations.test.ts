@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  __minerDashboardRecommendationsInternals,
   buildMinerDashboardNextActions,
   buildMinerDashboardRepoFit,
   previousDecisionPackFromSnapshots,
 } from "../../src/services/miner-dashboard-recommendations";
 import type { ContributorDecisionPack } from "../../src/services/decision-pack";
 import type { SignalSnapshotRecord } from "../../src/types";
+import { PUBLIC_TOKEN_SAMPLES } from "../helpers/public-token-samples";
 
 const FORBIDDEN_PUBLIC_CHANGE_TEXT =
   /wallet|hotkey|coldkey|raw trust|trust[-\s]?score|payout|reward[-\s]?estimate|farming|private[-\s]?reviewability|public[-\s]?score[-\s]?(?:estimate|prediction)|private[-\s]?scoreability|scoreability|\/Users|\/home|\/tmp|github_pat|ghp_/i;
@@ -365,6 +367,25 @@ describe("miner dashboard recommendation metadata", () => {
     expect(repoStateReasons).toContain("private context");
     expect(JSON.stringify(enriched?.rerunReasons)).not.toContain(fakeEnrollId);
     expect(JSON.stringify(enriched?.rerunReasons)).not.toContain(fakeSecret);
+  });
+
+  it("REGRESSION: sanitizePublicText redacts a ghs_ GitHub App installation token (the createInstallationToken gap #9697)", () => {
+    const { sanitizePublicText } = __minerDashboardRecommendationsInternals;
+    // ghs_ is the App-installation access token this Worker mints on every pass; the ghp_-only list this
+    // surface used to carry passed it through verbatim. It must now collapse to the same placeholder as ghp_.
+    const installationToken = `ghs_${"A".repeat(24)}`;
+    expect(sanitizePublicText(`token ${installationToken} leaked`)).toBe("token private context leaked");
+    expect(sanitizePublicText(`token ghp_${"A".repeat(24)} leaked`)).toBe("token private context leaked");
+  });
+
+  it.each(PUBLIC_TOKEN_SAMPLES)("sanitizePublicText redacts every token prefix in PUBLIC_TOKEN_INLINE (#9697): %s", (token) => {
+    const { sanitizePublicText } = __minerDashboardRecommendationsInternals;
+    expect(sanitizePublicText(`leak ${token} here`)).toBe("leak private context here");
+  });
+
+  it("sanitizePublicText leaves a non-token recommendation string unmodified (#9697)", () => {
+    const { sanitizePublicText } = __minerDashboardRecommendationsInternals;
+    expect(sanitizePublicText("Rerun when the queue changes")).toBe("Rerun when the queue changes");
   });
 
   it("selects the previous ready decision-pack snapshot", () => {

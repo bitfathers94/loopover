@@ -42,6 +42,29 @@ export const PUBLIC_LOCAL_PATH_SCRUB_PATTERN = new RegExp(String.raw`(?:${PUBLIC
 // local-branch repo-path renderer). Non-global so `.test()` stays stateless across calls.
 export const PUBLIC_LOCAL_PATH_PREFIX_PATTERN = new RegExp(String.raw`^(?:${PUBLIC_LOCAL_PATH_INLINE})`, "i");
 
+// `PUBLIC_TOKEN_INLINE` is the canonical secret-token-prefix vocabulary (alternation source only — no flags,
+// no anchors, no trailing body class), the token analogue of `PUBLIC_LOCAL_PATH_INLINE`. It is the union of
+// every prefix the public-surface scrubbers under src/services/ historically hand-listed, so those surfaces
+// compose from one source instead of re-typing (and drifting) the list: the GitHub token class `gh[pousr]_`
+// (personal `ghp_`, OAuth `gho_`, user-to-server `ghu_`, server-to-server / App-installation `ghs_`, refresh
+// `ghr_` — the same class src/review/secret-patterns.ts matches), `github_pat_`, LoopOver's own `gts_` session
+// and `orbenr_`/`orbsec_` Orb-broker opaque tokens, GitLab `glpat-`, OpenAI-style `sk-`, and Slack `xox[baprs]-`.
+// A surface appends its own trailing body class (as it does for the path root) so adding a new provider's
+// prefix here updates every surface at once — no surface can silently miss `ghs_` (this Worker's own
+// installation token, minted by createInstallationToken) again.
+export const PUBLIC_TOKEN_INLINE = String.raw`gh[pousr]_|github_pat_|gts_|orbenr_|orbsec_|glpat-|sk-|xox[baprs]-`;
+
+// Fresh `/g` matcher for `.replace()` surfaces that swap a bare secret token for a placeholder: a prefix from
+// `PUBLIC_TOKEN_INLINE` plus the token body. It returns a NEW RegExp on every call and is deliberately NOT
+// exported as a shared module-level `/g` constant — a single `/g` object reused across call sites carries its
+// `lastIndex` between them, so a later `.test()`/`.exec()` (or a `.replace()` interleaved with one) could start
+// mid-string and miss a leading token. (`String.prototype.replace` resets `lastIndex` within its own single
+// call, which is why the shared path scrubber is safe, but a token matcher shared this widely should not rely
+// on that.)
+export function publicTokenPattern(): RegExp {
+  return new RegExp(String.raw`\b(?:${PUBLIC_TOKEN_INLINE})[A-Za-z0-9_=-]{8,}`, "g");
+}
+
 export const PUBLIC_UNSAFE_PATTERN = new RegExp(String.raw`\b(${PUBLIC_UNSAFE_TERMS})\b|${PUBLIC_LOCAL_PATH_INLINE}`, "i");
 
 /** True iff `text` contains nothing that must stay private — i.e. it is safe to surface on a public GitHub surface. */

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildScorePreview } from "../../src/scoring/preview";
-import { explainScoreBreakdown } from "../../src/services/score-breakdown";
+import { __scoreBreakdownInternals, explainScoreBreakdown } from "../../src/services/score-breakdown";
+import { PUBLIC_TOKEN_SAMPLES } from "../helpers/public-token-samples";
 import type { RepositoryRecord, ScoringModelSnapshotRecord } from "../../src/types";
 
 const FORBIDDEN = /\b(wallet|hotkey|coldkey|mnemonic|farming|payout|raw[-_\s]?trust)\b/i;
@@ -761,5 +762,18 @@ describe("explainScoreBreakdown", () => {
     const credibilityComponent = breakdown.components.find((c) => c.component === "credibilityMultiplier");
     expect(credibilityComponent?.summary).toMatch(/credibility/i);
     expect(serialized).not.toMatch(FORBIDDEN);
+  });
+});
+
+describe("sanitizeScoreBreakdownText token redaction (#9697 shared token source)", () => {
+  it.each(PUBLIC_TOKEN_SAMPLES)("redacts every token prefix in PUBLIC_TOKEN_INLINE: %s", (token) => {
+    // This surface previously matched only github_pat_/gh[pousr]_ and passed gts_/orbenr_/orbsec_/glpat-/sk-/xox through.
+    expect(__scoreBreakdownInternals.sanitizeScoreBreakdownText(`leak ${token} here`)).toBe("leak <redacted> here");
+  });
+
+  it("leaves a non-token breakdown string unmodified", () => {
+    expect(__scoreBreakdownInternals.sanitizeScoreBreakdownText("credibility saturated near the cap")).toBe(
+      "credibility saturated near the cap",
+    );
   });
 });

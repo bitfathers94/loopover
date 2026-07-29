@@ -4,8 +4,11 @@ import {
   PUBLIC_LOCAL_PATH_INLINE,
   PUBLIC_LOCAL_PATH_PREFIX_PATTERN,
   PUBLIC_LOCAL_PATH_SCRUB_PATTERN,
+  PUBLIC_TOKEN_INLINE,
   PUBLIC_UNSAFE_PATTERN,
+  publicTokenPattern,
 } from "../../src/signals/redaction";
+import { PUBLIC_TOKEN_SAMPLES } from "../helpers/public-token-samples";
 
 describe("isPublicSafeText (#542 shared public/private boundary)", () => {
   it("accepts text with no private signals", () => {
@@ -119,5 +122,48 @@ describe("shared local-path constants (#1418 drift fix)", () => {
     // Non-global so .test() stays stateless across repeated calls on the same input.
     expect(PUBLIC_LOCAL_PATH_PREFIX_PATTERN.test("/root/x")).toBe(true);
     expect(PUBLIC_LOCAL_PATH_PREFIX_PATTERN.test("/root/x")).toBe(true);
+  });
+});
+
+describe("shared token constants (#9697 one token-prefix source of truth)", () => {
+  it.each(PUBLIC_TOKEN_SAMPLES)("publicTokenPattern() matches every union prefix: %s", (token) => {
+    expect(`leak ${token} here`.replace(publicTokenPattern(), "<redacted>")).toBe("leak <redacted> here");
+  });
+
+  it("includes the previously-divergent GitHub (gh[pousr]_) and Slack (xox[baprs]-) classes", () => {
+    // ghs_ is the App-installation token this Worker mints on every pass; the three ghp_-only surfaces used
+    // to pass it through verbatim. All four gh classes plus a Slack token now redact from one source.
+    for (const token of ["ghs_", "gho_", "ghu_", "ghr_"].map((p) => `${p}${"A".repeat(24)}`)) {
+      expect(`x ${token}`.replace(publicTokenPattern(), "<redacted>")).toBe("x <redacted>");
+    }
+    expect(`x xoxb-${"A".repeat(24)}`.replace(publicTokenPattern(), "<redacted>")).toBe("x <redacted>");
+  });
+
+  it("leaves a non-token string untouched", () => {
+    expect("no secrets in this ordinary sentence".replace(publicTokenPattern(), "<redacted>")).toBe(
+      "no secrets in this ordinary sentence",
+    );
+  });
+
+  it("returns a fresh /g RegExp on every call and repeated .replace() stays idempotent (no shared lastIndex)", () => {
+    const first = publicTokenPattern();
+    const second = publicTokenPattern();
+    expect(first).not.toBe(second);
+    expect(first.global).toBe(true);
+    expect(second.global).toBe(true);
+    const input = `token ghs_${"A".repeat(24)} leaked`;
+    const once = input.replace(publicTokenPattern(), "<redacted>");
+    const twice = input.replace(publicTokenPattern(), "<redacted>");
+    expect(once).toBe("token <redacted> leaked");
+    expect(twice).toBe(once);
+    // Even reusing one object across two .replace() calls must not carry lastIndex forward.
+    const shared = publicTokenPattern();
+    expect(input.replace(shared, "<redacted>")).toBe(input.replace(shared, "<redacted>"));
+  });
+
+  it("is the union of all four historical prefix lists (no prefix dropped)", () => {
+    for (const prefix of ["gh[pousr]_", "github_pat_", "gts_", "orbenr_", "orbsec_", "glpat-", "sk-", "xox[baprs]-"]) {
+      expect(PUBLIC_TOKEN_INLINE).toContain(prefix);
+    }
   });
 });

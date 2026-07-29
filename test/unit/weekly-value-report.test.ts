@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildWeeklyValueReport, formatWeeklyValueReportMarkdown, generateWeeklyValueReport } from "../../src/services/weekly-value-report";
+import { __weeklyValueReportInternals, buildWeeklyValueReport, formatWeeklyValueReportMarkdown, generateWeeklyValueReport } from "../../src/services/weekly-value-report";
+import { PUBLIC_TOKEN_SAMPLES } from "../helpers/public-token-samples";
 import type {
   InstallationHealthRecord,
   InstallationRecord,
@@ -543,3 +544,14 @@ function rollupStatus(input: Pick<ProductUsageRollupStatus, "status"> & { warnin
     warnings: input.warnings ?? [],
   };
 }
+
+describe("sanitizeReportText token redaction (#9697 shared token source)", () => {
+  it.each(PUBLIC_TOKEN_SAMPLES)("redacts every token prefix in PUBLIC_TOKEN_INLINE: %s", (token) => {
+    // The gh[pousr]_ class (gho_/ghu_/ghs_/ghr_) was the gap here; xox[baprs]- was already covered locally.
+    expect(__weeklyValueReportInternals.sanitizeReportText(`leak ${token} here`)).toBe("leak <redacted-token> here");
+  });
+
+  it("leaves a non-token rollup dimension unmodified", () => {
+    expect(__weeklyValueReportInternals.sanitizeReportText("Top repos this week")).toBe("Top repos this week");
+  });
+});
