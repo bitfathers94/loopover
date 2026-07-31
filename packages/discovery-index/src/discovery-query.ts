@@ -147,9 +147,19 @@ function surfaceGithubWarnings(source: string, warnings: string[]): void {
   }
 }
 
-async function computeCandidates(query: DiscoveryIndexQuery, deps: DiscoveryQueryDeps): Promise<DiscoveryIndexCandidate[]> {
+/** {@link computeCandidates}' result: the candidate list plus whether every `fetchRepoIssues`/`searchIssues`
+ *  call that fed it came back warning-free. `incomplete: true` means at least one page fetch failed
+ *  (non-OK response, non-array payload, ...) — the caller collected what it could, but the set is a lower
+ *  bound, not the full scope, and must not be promoted into the shared result cache (see `runDiscoveryQuery`). */
+interface ComputeCandidatesResult {
+  candidates: DiscoveryIndexCandidate[];
+  incomplete: boolean;
+}
+
+async function computeCandidates(query: DiscoveryIndexQuery, deps: DiscoveryQueryDeps): Promise<ComputeCandidatesResult> {
   const seen = new Set<string>();
   const candidates: DiscoveryIndexCandidate[] = [];
+  let incomplete = false;
 
   const addCandidate = (repoFullName: string, issue: GitHubIssue, verdict: AiPolicyVerdict): void => {
     const candidate = buildCandidate(repoFullName, issue, verdict);
@@ -175,6 +185,7 @@ async function computeCandidates(query: DiscoveryIndexQuery, deps: DiscoveryQuer
     if (!verdict.allowed) continue;
     const { issues, warnings } = await deps.github.fetchRepoIssues(repoFullName);
     surfaceGithubWarnings(repoFullName, warnings);
+    if (warnings.length > 0) incomplete = true;
     for (const issue of issues) addCandidate(repoFullName, issue, verdict);
   }
 
@@ -182,6 +193,7 @@ async function computeCandidates(query: DiscoveryIndexQuery, deps: DiscoveryQuer
     const searchQuery = `org:${org} state:open type:issue`;
     const { issues, warnings } = await deps.github.searchIssues(searchQuery);
     surfaceGithubWarnings(searchQuery, warnings);
+    if (warnings.length > 0) incomplete = true;
     await addFromSearch(issues);
   }
 
@@ -189,13 +201,14 @@ async function computeCandidates(query: DiscoveryIndexQuery, deps: DiscoveryQuer
     const searchQuery = `${term} state:open type:issue`;
     const { issues, warnings } = await deps.github.searchIssues(searchQuery);
     surfaceGithubWarnings(searchQuery, warnings);
+    if (warnings.length > 0) incomplete = true;
     await addFromSearch(issues);
   }
 
   // Deterministic ordering so pagination offsets are stable across a cache lifetime (and identical for two
-  // requests that happen to race a cache miss — see computeCandidates' getOrCompute caller).
+  // requests that happen to race a cache miss — see runDiscoveryQuery's cache-write decision below).
   candidates.sort((a, b) => (a.repoFullName === b.repoFullName ? a.issueNumber - b.issueNumber : a.repoFullName.localeCompare(b.repoFullName)));
-  return candidates;
+  return { candidates, incomplete };
 }
 
 /**
@@ -209,12 +222,21 @@ async function computeCandidates(query: DiscoveryIndexQuery, deps: DiscoveryQuer
  */
 export async function runDiscoveryQuery(query: DiscoveryIndexQuery, deps: DiscoveryQueryDeps): Promise<DiscoveryIndexResponse> {
   const scopeKey = scopeCacheKey(query);
-  let missed = false;
-  const allCandidates = await deps.resultCache.getOrCompute(scopeKey, deps.cacheTtlMs, () => {
-    missed = true;
-    return computeCandidates(query, deps);
-  });
-  incr("discovery_index_cache_lookups_total", { cache: "result", outcome: missed ? "miss" : "hit" });
+  const cached = deps.resultCache.get(scopeKey);
+  let allCandidates: DiscoveryIndexCandidate[];
+  if (cached !== undefined) {
+    allCandidates = cached;
+  } else {
+    const result = await computeCandidates(query, deps);
+    allCandidates = result.candidates;
+    // A pass that hit a GitHub failure is a lower bound, not the full scope — caching it would pin the
+    // truncated set for the rest of the TTL and hand it to every other caller sharing this scope as if it
+    // were complete. Leave the cache untouched so the very next request retries GitHub instead.
+    if (!result.incomplete) {
+      deps.resultCache.set(scopeKey, allCandidates, deps.cacheTtlMs);
+    }
+  }
+  incr("discovery_index_cache_lookups_total", { cache: "result", outcome: cached !== undefined ? "hit" : "miss" });
   const offset = decodeCursor(query.cursor);
   const page = allCandidates.slice(offset, offset + query.limit);
   const nextOffset = offset + page.length;

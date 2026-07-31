@@ -359,4 +359,66 @@ describe("discovery-index runDiscoveryQuery (#7164)", () => {
     await runDiscoveryQuery(query({ repos: ["acme/one"] }), makeDeps(github));
     expect(errorSpy).not.toHaveBeenCalled();
   });
+
+  it("caches a warning-free pass exactly as before: fetched once across two identical requests, second response identical to first", async () => {
+    const { github, calls } = makeStubGitHub({
+      issuesByRepo: { "acme/one": [{ number: 1, title: "T" }] },
+      filesByRepo: { "acme/one": { "AI-USAGE.md": ALLOWED_AI_USAGE } },
+    });
+    const deps = makeDeps(github);
+    const first = await runDiscoveryQuery(query({ repos: ["acme/one"] }), deps);
+    const second = await runDiscoveryQuery(query({ repos: ["acme/one"] }), deps);
+    expect(calls.filter((c) => c.method === "fetchRepoIssues")).toHaveLength(1);
+    expect(second).toEqual(first);
+  });
+
+  it("REGRESSION: a GitHub-failure-truncated candidate set is not cached for the TTL (repo path)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { github, calls } = makeStubGitHub({
+      issuesByRepo: { "acme/one": [{ number: 1, title: "T" }] },
+      warningsByRepo: { "acme/one": ["GitHub returned 500 for acme/one issues"] },
+      filesByRepo: { "acme/one": { "AI-USAGE.md": ALLOWED_AI_USAGE } },
+    });
+    const deps = makeDeps(github);
+    const first = await runDiscoveryQuery(query({ repos: ["acme/one"] }), deps);
+    const second = await runDiscoveryQuery(query({ repos: ["acme/one"] }), deps);
+    // Both calls hit GitHub again — the truncated set was never promoted into the shared cache.
+    expect(calls.filter((c) => c.method === "fetchRepoIssues")).toHaveLength(2);
+    expect(first.candidates.map((c) => c.issueNumber)).toEqual([1]);
+    expect(second.candidates.map((c) => c.issueNumber)).toEqual([1]);
+    expect(deps.resultCache.size).toBe(0);
+  });
+
+  it("REGRESSION: a GitHub-failure-truncated candidate set is not cached for the TTL (org-search path)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { github, calls } = makeStubGitHub({
+      searchResults: {
+        "org:acme state:open type:issue": [{ number: 1, title: "Org", repository_url: "https://api.github.com/repos/acme/one" }],
+      },
+      warningsBySearch: { "org:acme state:open type:issue": ["GitHub returned 500 for search"] },
+      filesByRepo: { "acme/one": { "AI-USAGE.md": ALLOWED_AI_USAGE } },
+    });
+    const deps = makeDeps(github);
+    const first = await runDiscoveryQuery(query({ orgs: ["acme"] }), deps);
+    const second = await runDiscoveryQuery(query({ orgs: ["acme"] }), deps);
+    // Both calls re-search GitHub — the incomplete org-search pass was never cached either.
+    expect(calls.filter((c) => c.method === "searchIssues")).toHaveLength(2);
+    expect(first.candidates.map((c) => c.issueNumber)).toEqual([1]);
+    expect(second.candidates.map((c) => c.issueNumber)).toEqual([1]);
+    expect(deps.resultCache.size).toBe(0);
+  });
+
+  it("records a result-cache miss (not a hit) on the second call of an incomplete pass", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { github } = makeStubGitHub({
+      issuesByRepo: { "acme/one": [{ number: 1, title: "T" }] },
+      warningsByRepo: { "acme/one": ["GitHub returned 500 for acme/one issues"] },
+      filesByRepo: { "acme/one": { "AI-USAGE.md": ALLOWED_AI_USAGE } },
+    });
+    const deps = makeDeps(github);
+    await runDiscoveryQuery(query({ repos: ["acme/one"] }), deps);
+    await runDiscoveryQuery(query({ repos: ["acme/one"] }), deps);
+    expect(counterValue("discovery_index_cache_lookups_total", { cache: "result", outcome: "miss" })).toBe(2);
+    expect(counterValue("discovery_index_cache_lookups_total", { cache: "result", outcome: "hit" })).toBe(0);
+  });
 });
