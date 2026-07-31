@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as repositoriesModule from "../../src/db/repositories";
 import { getRepoQueueTrendSnapshot, persistRepoGithubTotalsSnapshot, persistSignalSnapshot, upsertPullRequestFromGitHub, upsertRepositoryFromGitHub } from "../../src/db/repositories";
 import { generateSignalSnapshots } from "../../src/queue/processors";
-import { buildQueueTrendReport, buildUnavailableQueueTrendReport, type QueueTrendReport } from "../../src/services/queue-trends";
+import {
+  buildQueueTrendReport,
+  buildUnavailableQueueTrendReport,
+  QUEUE_TREND_HISTORY_DAYS,
+  QUEUE_TREND_SNAPSHOT_LIMIT,
+  type QueueTrendReport,
+} from "../../src/services/queue-trends";
 import type { RepoGithubTotalsSnapshotRecord } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
 
@@ -223,6 +229,11 @@ describe("queue trend windows", () => {
     await generateSignalSnapshots(env, "acme/registered-only");
 
     await expect(getRepoQueueTrendSnapshot(env, "acme/registered-only")).resolves.toBeNull();
+  });
+
+  it("#10020: the queue-health snapshot limit stays sized for the full history window, not a shrinking backstop", () => {
+    expect(QUEUE_TREND_HISTORY_DAYS).toBeGreaterThanOrEqual(30);
+    expect(QUEUE_TREND_SNAPSHOT_LIMIT).toBeGreaterThanOrEqual(QUEUE_TREND_HISTORY_DAYS * 4);
   });
 
   it("#9293: one repo's data-gathering failure still persists siblings and surfaces an aggregate error", async () => {

@@ -4,6 +4,10 @@ import { nowIso } from "../utils/json";
 
 const QUEUE_TREND_WINDOWS_DAYS = [7, 14, 30] as const;
 export const QUEUE_TREND_HISTORY_DAYS = 35;
+// queue-health snapshots are written up to four times a day (the six-hourly full-sync window, plus
+// repairDataFidelity's per-repo fan-out and manual runs) -- sized so the time bound in trendSince stays the
+// primary constraint on the read and this is only a backstop, not the other way around (#10020).
+export const QUEUE_TREND_SNAPSHOT_LIMIT = QUEUE_TREND_HISTORY_DAYS * 4;
 
 export type QueueTrendWindow = {
   windowDays: 7 | 14 | 30;

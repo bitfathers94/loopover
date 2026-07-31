@@ -13,16 +13,16 @@ import {
   listIssueSignalSample,
   listOpenPullRequests,
   listRecentMergedPullRequests,
+  listRecentSignalSnapshotsForTargets,
   listRepoGithubTotalsSnapshotHistory,
   listRepoLabels,
   listRepositories,
-  listSignalSnapshots,
   persistSignalSnapshot,
   replaceCollisionEdges,
   upsertRepoQueueTrendSnapshot,
 } from "../db/repositories";
 import { computeRepoOutcomePatterns, REPO_OUTCOME_PATTERNS_SIGNAL } from "../services/repo-outcome-patterns";
-import { buildQueueTrendReport, QUEUE_TREND_HISTORY_DAYS } from "../services/queue-trends";
+import { buildQueueTrendReport, QUEUE_TREND_HISTORY_DAYS, QUEUE_TREND_SNAPSHOT_LIMIT } from "../services/queue-trends";
 import {
   buildCollisionEdges,
   buildCollisionReport,
@@ -119,7 +119,7 @@ async function generateSignalSnapshotForRepo(
       sinceIso: trendSince,
       limit: 120,
     }),
-    listSignalSnapshots(env, "queue-health", repo.fullName),
+    listRecentSignalSnapshotsForTargets(env, "queue-health", [repo.fullName], QUEUE_TREND_SNAPSHOT_LIMIT, trendSince),
   ]);
   const collisions = buildCollisionReport(
     repo.fullName,
@@ -199,7 +199,7 @@ async function generateSignalSnapshotForRepo(
     payload: buildQueueTrendReport({
       repoFullName: repo.fullName,
       totalsSnapshots: totalsHistory,
-      queueHealthSnapshots: queueHealthHistory,
+      queueHealthSnapshots: queueHealthHistory.get(repo.fullName) ?? [],
       currentQueueHealth: queueHealth,
       generatedAt,
     }) as unknown as Record<string, never>,

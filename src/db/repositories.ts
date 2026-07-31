@@ -6190,7 +6190,12 @@ export async function listRecentSignalSnapshotsForTargets(
 ): Promise<Map<string, SignalSnapshotRecord[]>> {
   const result = new Map<string, SignalSnapshotRecord[]>();
   if (targetKeys.length === 0) return result;
-  const perTargetLimit = Math.max(1, Math.min(maxPerTarget, 100));
+  // 1000, not 100 (#10020): a caller-supplied maxPerTarget above 100 (e.g. queue-trends' own
+  // QUEUE_TREND_SNAPSHOT_LIMIT = QUEUE_TREND_HISTORY_DAYS * 4 = 140) used to get silently re-clamped
+  // back down to 100 here regardless of what the caller asked for, defeating the whole point of sizing
+  // that constant to the caller's real per-day snapshot cadence -- the ceiling below is just a sanity
+  // bound against a pathological caller value, not the intended per-target limit.
+  const perTargetLimit = Math.max(1, Math.min(maxPerTarget, 1000));
   // The time bound (#9699) is applied INSIDE the windowed subquery so row_number() ranks over the in-window
   // set, not the whole table — otherwise a repo with many recent snapshots could rank its cap entirely within
   // the last few days and never surface the older weeks the trend card needs. maxPerTarget stays the backstop.
