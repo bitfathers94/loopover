@@ -5,6 +5,10 @@ const defaultMinIntervalMs = 60_000;
 const defaultMaxIntervalMs = 5 * 60_000;
 const defaultMaxAttempts = 1;
 const defaultRequestTimeoutMs = 10_000;
+// Cap fetchCheckRuns' page-follow loop (#10007) so a malfunctioning or looping check-runs endpoint can't wedge
+// `manage poll` / `loop` forever, mirroring opportunity-fanout.ts's capped Link-follow loop. 100 check runs per
+// page x 50 pages = 5,000 check runs, far beyond any real PR's check-run count.
+const defaultMaxCheckRunPages = 50;
 const githubApiVersion = "2022-11-28";
 
 export type CheckRunConclusion = "pending" | "success" | "failure" | "neutral";
@@ -33,6 +37,7 @@ export type PollCheckRunsOptions = {
   minIntervalMs?: number;
   maxIntervalMs?: number;
   requestTimeoutMs?: number;
+  maxPages?: number;
   sleepFn?: (delayMs: number) => Promise<unknown>;
 };
 
@@ -44,6 +49,7 @@ type NormalizedPollOptions = {
   minIntervalMs: number;
   maxIntervalMs: number;
   requestTimeoutMs: number;
+  maxPages: number;
   sleepFn: (delayMs: number) => Promise<unknown>;
 };
 
@@ -81,6 +87,7 @@ function normalizeOptions(options: PollCheckRunsOptions = {}): NormalizedPollOpt
     minIntervalMs: normalizePositiveInt(options.minIntervalMs, defaultMinIntervalMs, 1, 60 * 60_000),
     maxIntervalMs: normalizePositiveInt(options.maxIntervalMs, defaultMaxIntervalMs, 1, 60 * 60_000),
     requestTimeoutMs: normalizePositiveInt(options.requestTimeoutMs, defaultRequestTimeoutMs, 1, 60_000),
+    maxPages: normalizePositiveInt(options.maxPages, defaultMaxCheckRunPages, 1, 1000),
     sleepFn:
       options.sleepFn ??
       ((delayMs: number) => new Promise((resolve) => setTimeout(resolve, delayMs))),
@@ -231,9 +238,8 @@ async function fetchCheckRuns(
   options: NormalizedPollOptions,
 ): Promise<NormalizedCheckRun[]> {
   const checks: NormalizedCheckRun[] = [];
-  let page = 1;
   let expectedTotalCount: number | null = null;
-  while (true) {
+  for (let page = 1; page <= options.maxPages; page += 1) {
     const { payload, response } = await githubGetJsonResponse(
       apiUrl(
         options.apiBaseUrl,
@@ -255,8 +261,8 @@ async function fetchCheckRuns(
     if (pageChecks.length === 0) {
       throw new Error("github_check_runs_pagination_incomplete");
     }
-    page += 1;
   }
+  throw new Error("github_check_runs_pagination_cap_exceeded");
 }
 
 export async function pollCheckRuns(

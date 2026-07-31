@@ -511,6 +511,79 @@ describe("miner CI check-run poller (#2323)", () => {
     ).rejects.toThrow("github_check_runs_pagination_incomplete");
   });
 
+  it('REGRESSION: a never-ending rel="next" chain stops at the page cap instead of looping forever (#10007)', async () => {
+    let checkRunsCalls = 0;
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/pulls/44")) return prResponse("looping-sha");
+      if (url.includes("/check-runs")) {
+        checkRunsCalls += 1;
+        // Always advertises another page alongside a non-empty payload, regardless of which page was requested --
+        // the malfunctioning endpoint this issue is about.
+        return jsonResponse(
+          { check_runs: [checkRun("validate", "in_progress")] },
+          {
+            headers: {
+              link: `<${API}/repos/acme/widgets/commits/looping-sha/check-runs?per_page=100&page=2>; rel="next"`,
+            },
+          },
+        );
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+
+    await expect(
+      pollCheckRuns("acme/widgets", 44, {
+        apiBaseUrl: API,
+        fetchFn,
+        maxPages: 3,
+        sleepFn: vi.fn(async () => {}),
+      }),
+    ).rejects.toThrow("github_check_runs_pagination_cap_exceeded");
+    expect(checkRunsCalls).toBe(3);
+  });
+
+  it("clamps maxPages to its [1, 1000] bounds", async () => {
+    let floorCalls = 0;
+    const floorFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/pulls/45")) return prResponse("floor-sha");
+      if (url.includes("/check-runs")) {
+        floorCalls += 1;
+        return jsonResponse(
+          { check_runs: [checkRun("validate", "in_progress")] },
+          {
+            headers: {
+              link: `<${API}/repos/acme/widgets/commits/floor-sha/check-runs?per_page=100&page=2>; rel="next"`,
+            },
+          },
+        );
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+    // maxPages <= 0 clamps to a floor of 1, so even a single non-empty page hits the cap immediately.
+    await expect(
+      pollCheckRuns("acme/widgets", 45, {
+        apiBaseUrl: API,
+        fetchFn: floorFetch,
+        maxPages: 0,
+        sleepFn: vi.fn(async () => {}),
+      }),
+    ).rejects.toThrow("github_check_runs_pagination_cap_exceeded");
+    expect(floorCalls).toBe(1);
+
+    const ceilingFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/pulls/46")) return prResponse("ceiling-sha");
+      if (url.includes("/check-runs")) return checksResponse([checkRun("validate", "completed", "success")]);
+      return jsonResponse({}, { status: 404 });
+    });
+    // An outsized maxPages clamps to a ceiling of 1000, not an unbounded value.
+    await expect(
+      pollCheckRuns("acme/widgets", 46, { apiBaseUrl: API, fetchFn: ceilingFetch, maxPages: 1_000_000 }),
+    ).resolves.toMatchObject({ conclusion: "success" });
+  });
+
   it("returns pending after exhausting maxAttempts", async () => {
     const pendingForever = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
