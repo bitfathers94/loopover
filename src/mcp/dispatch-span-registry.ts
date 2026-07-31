@@ -8,7 +8,11 @@
 // means every tool call runs unwrapped, at zero cost. That asymmetry is deliberate and is why this
 // is a registry rather than a direct import: Workers has no OTel collector to export to, and pulling
 // the tracer into that bundle would cost real bytes for a capability it cannot use.
-export type McpDispatchSpanRunner = <T>(name: string, attributes: Record<string, unknown>, fn: () => Promise<T>) => Promise<T>;
+export type McpDispatchSpanRunner = <T>(
+  name: string,
+  attributes: Record<string, unknown>,
+  fn: (setAttributes?: (attributes: Record<string, unknown>) => void) => Promise<T>,
+) => Promise<T>;
 
 let runner: McpDispatchSpanRunner | null = null;
 

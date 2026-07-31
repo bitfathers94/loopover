@@ -48,8 +48,14 @@ export type DispatchTelemetrySink = {
   recordToolCall: (call: McpToolCallTelemetry, properties: { usage: Record<string, unknown>; mcpToolCall: Record<string, unknown> }) => void;
   /** A genuine throw. Never throws. */
   captureException: (error: unknown, call: McpToolCallTelemetry) => void;
-  /** Wrap the call in a span when tracing is on; a no-op passthrough when it is not. */
-  withSpan: <T>(name: string, attributes: Record<string, unknown>, fn: () => Promise<T>) => Promise<T>;
+  /**
+   * Wrap the call in a span when tracing is on; a no-op passthrough when it is not. `fn` is handed a
+   * setter it can call once the call's outcome is known, so attributes discovered after the handler
+   * runs (`ok`, `error_code`) still land on the span before it ends. A sink with no real span --
+   * `NOOP_DISPATCH_SINK`, or the passthrough when nothing is registered -- never calls `fn` with a
+   * setter at all, so publishing stays a safe no-op.
+   */
+  withSpan: <T>(name: string, attributes: Record<string, unknown>, fn: (setAttributes?: (attributes: Record<string, unknown>) => void) => Promise<T>) => Promise<T>;
   /**
    * Session/server/client identity for the canonical `$mcp_*` events (#10175).
    *
@@ -104,8 +110,17 @@ export function instrumentToolDispatch<TArgs extends unknown[], TResult extends 
       }
     };
 
+    // `sink.withSpan` hands its `fn` a setter once the real span exists; captured here so both the
+    // return path and the throw path below can publish onto it. Unset when the sink has no span at
+    // all (NOOP, or nothing registered), in which case publishing is a no-op.
+    let setSpanAttributes: ((attributes: Record<string, unknown>) => void) | undefined;
+    const publishSpanAttributes = (call: McpToolCallTelemetry): void => {
+      setSpanAttributes?.(buildMcpToolSpanAttributes(call));
+    };
+
     try {
-      return await sink.withSpan(mcpToolSpanName(toolName), attributes, async () => {
+      return await sink.withSpan(mcpToolSpanName(toolName), attributes, async (setAttributes) => {
+        setSpanAttributes = setAttributes;
         const result = await handler(...args);
         const ok = result?.isError !== true;
         const call: McpToolCallTelemetry = {
@@ -125,6 +140,7 @@ export function instrumentToolDispatch<TArgs extends unknown[], TResult extends 
           // One line per failed call, with the same closed property set and no payload content.
           log("warn", "mcp_tool_call_failed", buildMcpToolSpanAttributes(call));
         }
+        publishSpanAttributes(call);
         return result;
       });
     } catch (error) {
@@ -143,6 +159,7 @@ export function instrumentToolDispatch<TArgs extends unknown[], TResult extends 
         // Same guarantee on the crash path.
       }
       log("error", "mcp_tool_call_threw", buildMcpToolSpanAttributes(call));
+      publishSpanAttributes(call);
       throw error;
     }
   };

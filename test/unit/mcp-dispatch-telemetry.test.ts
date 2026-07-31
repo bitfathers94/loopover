@@ -231,16 +231,25 @@ describe("MCP telemetry allowlist (#9525)", () => {
 });
 
 describe("MCP dispatch chokepoint (#9525)", () => {
-  const sink = (): { sink: DispatchTelemetrySink; calls: McpToolCallTelemetry[]; exceptions: unknown[] } => {
+  const sink = (): {
+    sink: DispatchTelemetrySink;
+    calls: McpToolCallTelemetry[];
+    exceptions: unknown[];
+    spanAttributes: Record<string, unknown>[];
+  } => {
     const calls: McpToolCallTelemetry[] = [];
     const exceptions: unknown[] = [];
+    const spanAttributes: Record<string, unknown>[] = [];
     return {
       calls,
       exceptions,
+      spanAttributes,
       sink: {
         recordToolCall: (recorded) => calls.push(recorded),
         captureException: (error) => exceptions.push(error),
-        withSpan: async (_name, _attributes, fn) => fn(),
+        // A recording span: publishes whatever `fn` sets, so a test can assert on it the same way it
+        // asserts on `calls`.
+        withSpan: async (_name, _attributes, fn) => fn((attrs) => spanAttributes.push(attrs)),
       },
     };
   };
@@ -307,6 +316,30 @@ describe("MCP dispatch chokepoint (#9525)", () => {
     error.mockRestore();
   });
 
+  it("publishes the completed call's attributes onto the span on the return path (#10042)", async () => {
+    const { sink: spy, spanAttributes } = sink();
+    const wrapped = instrumentToolDispatch("loopover_get_repo_context", spy, async (_args: unknown) => ({ structuredContent: { ok: 1 } }));
+    await wrapped({ owner: "a", repo: "b" });
+    expect(spanAttributes).toHaveLength(1);
+    // Same helper the log line uses (buildMcpToolSpanAttributes), so the span and the log line can
+    // never drift: strict subset, `ok` present, no `error_code` on success.
+    expect(spanAttributes[0]).toMatchObject({ tool: "loopover_get_repo_context", category: "maintainer", surface: "remote", ok: true });
+    expect("error_code" in spanAttributes[0]!).toBe(false);
+  });
+
+  it("publishes ok:false and the resolved error_code onto the span on the throw path (#10042)", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { sink: spy, spanAttributes } = sink();
+    const wrapped = instrumentToolDispatch("loopover_get_repo_context", spy, async (_args: unknown) => {
+      throw new Error("not configured");
+    });
+    await expect(wrapped({})).rejects.toThrow("not configured");
+    error.mockRestore();
+    expect(spanAttributes).toHaveLength(1);
+    expect(spanAttributes[0]).toMatchObject({ ok: false, error_code: "not_configured" });
+    expect(MCP_TELEMETRY_ERROR_CODES).toContain(spanAttributes[0]!.error_code);
+  });
+
   it("never lets a sink failure reach the caller, on either path", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const hostile: DispatchTelemetrySink = {
@@ -331,7 +364,7 @@ describe("MCP dispatch chokepoint (#9525)", () => {
     error.mockRestore();
   });
 
-  it("passes through unchanged with the no-op sink, whose every slot is inert", async () => {
+  it("passes through unchanged with the no-op sink, whose every slot is inert (#10042)", async () => {
     const wrapped = instrumentToolDispatch("loopover_get_repo_context", NOOP_DISPATCH_SINK, async (_args: unknown) => ({ structuredContent: { v: 1 } }));
     await expect(wrapped({})).resolves.toMatchObject({ structuredContent: { v: 1 } });
     // Called directly too: the no-op sink is what a deployment with nothing configured runs on
@@ -339,6 +372,12 @@ describe("MCP dispatch chokepoint (#9525)", () => {
     expect(NOOP_DISPATCH_SINK.recordToolCall(call, { usage: {}, mcpToolCall: {} })).toBeUndefined();
     expect(NOOP_DISPATCH_SINK.captureException(new Error("x"), call)).toBeUndefined();
     await expect(NOOP_DISPATCH_SINK.withSpan("n", {}, async () => "through")).resolves.toBe("through");
+    // No real span to publish onto: `fn` runs with no setter at all, rather than a no-op one, so a
+    // sink can tell "there is genuinely no span" apart from "there is a span that ignores updates".
+    await NOOP_DISPATCH_SINK.withSpan("n", {}, async (setAttributes) => {
+      expect(setAttributes).toBeUndefined();
+      return "through";
+    });
   });
 
   it("falls back to the unknown category for a tool with no contract entry", async () => {

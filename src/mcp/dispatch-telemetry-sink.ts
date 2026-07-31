@@ -84,7 +84,7 @@ async function captureEvents(
 export function createDispatchTelemetrySink(
   env: DispatchTelemetryEnv,
   defer: DeferWork,
-  withSpan?: <T>(name: string, attributes: Record<string, unknown>, fn: () => Promise<T>) => Promise<T>,
+  withSpan?: <T>(name: string, attributes: Record<string, unknown>, fn: (setAttributes?: (attributes: Record<string, unknown>) => void) => Promise<T>) => Promise<T>,
   context: McpAnalyticsContext = {},
 ): DispatchTelemetrySink {
   return {

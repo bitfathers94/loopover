@@ -375,7 +375,11 @@ async function main(): Promise<void> {
     // #9525: hand the MCP dispatch chokepoint a real span runner. Only this entry does -- the cloud
     // Worker has no collector to export to, so its slot stays null and every tool call runs
     // unwrapped. Registry rather than a direct import so ./selfhost/otel never enters that bundle.
-    setMcpDispatchSpanRunner((name, attributes, fn) => withOtelSpan(name, attributes, fn));
+    // #10042: the dispatch wrapper only knows the call's outcome (ok, error_code) once the handler
+    // returns or throws, so it publishes those onto the span via the setter rather than the
+    // attributes withOtelSpan opens the span with -- the same seam selfhost.http.request already
+    // uses below for its response attributes.
+    setMcpDispatchSpanRunner((name, attributes, fn) => withOtelSpan(name, attributes, () => fn(setCurrentOtelSpanAttributes)));
   }
   /* v8 ignore stop */
   const startedAt = Date.now();
