@@ -80,4 +80,85 @@ describe("findDeadExports (#9852)", () => {
     });
     expect(found.map((v) => v.symbol)).toEqual(["FOO"]);
   });
+
+  it("flags an exported class with no reference outside its own file, counting internalUses like const/function", () => {
+    const found = findDeadExports({
+      sourceRoots: ["src"],
+      referenceRoots: ["src"],
+      ...world({ "src/x.ts": "export class Orphan {}\nconst y = new Orphan();\n" }),
+    });
+    expect(found).toEqual([{ file: "src/x.ts", symbol: "Orphan", internalUses: 2 }]);
+  });
+
+  it("flags an exported enum with no reference outside its own file", () => {
+    const found = findDeadExports({
+      sourceRoots: ["src"],
+      referenceRoots: ["src"],
+      ...world({ "src/x.ts": "export enum Kind { A }\n" }),
+    });
+    expect(found.find((v) => v.symbol === "Kind")).toBeDefined();
+  });
+
+  it("does not flag a class referenced from another file, mirroring the const/function external-use case", () => {
+    const found = findDeadExports({
+      sourceRoots: ["src"],
+      referenceRoots: ["src"],
+      ...world({ "src/x.ts": "export class Used {}\n", "src/y.ts": "import { Used } from './x';\nnew Used();\n" }),
+    });
+    expect(found).toEqual([]);
+  });
+
+  it("matches `export abstract class` — the `abstract` modifier must not defeat the anchor (regression)", () => {
+    const found = findDeadExports({
+      sourceRoots: ["src"],
+      referenceRoots: ["src"],
+      ...world({ "src/x.ts": "export abstract class Base {}\n" }),
+    });
+    expect(found.map((v) => v.symbol)).toEqual(["Base"]);
+  });
+
+  it("does not match a non-exported class", () => {
+    const found = findDeadExports({
+      sourceRoots: ["src"],
+      referenceRoots: ["src"],
+      ...world({ "src/x.ts": "class NotExported {}\nnew NotExported();\n" }),
+    });
+    expect(found).toEqual([]);
+  });
+
+  it("matches `export const enum` consistently with a plain `export enum` — same symbol capture", () => {
+    const found = findDeadExports({
+      sourceRoots: ["src"],
+      referenceRoots: ["src"],
+      ...world({ "src/x.ts": "export const enum Kind { A }\n" }),
+    });
+    expect(found.map((v) => v.symbol)).toEqual(["Kind"]);
+  });
+
+  it("still ignores exported types and interfaces once class/enum are matched", () => {
+    const found = findDeadExports({
+      sourceRoots: ["src"],
+      referenceRoots: ["src"],
+      ...world({ "src/a.ts": "export type Unused = { a: 1 };\nexport interface AlsoUnused { b: 2 }\n" }),
+    });
+    expect(found).toEqual([]);
+  });
+
+  it("breaks on the first external reference for a class, same as the const/function early-break path", () => {
+    const found = findDeadExports({
+      sourceRoots: ["src"],
+      referenceRoots: ["src", "test"],
+      ...world({ "src/x.ts": "export class SeenElsewhere {}\n", "test/x.test.ts": "SeenElsewhere;\nSeenElsewhere;\n" }),
+    });
+    expect(found).toEqual([]);
+  });
+
+  it("reports internalUses for a class used only inside its own file, exercising the >1 fix-hint branch", () => {
+    const found = findDeadExports({
+      sourceRoots: ["src"],
+      referenceRoots: ["src"],
+      ...world({ "src/x.ts": "export class UsedInternally {}\nconst z = new UsedInternally();\nvoid z;\n" }),
+    });
+    expect(found.find((v) => v.symbol === "UsedInternally")?.internalUses).toBeGreaterThan(1);
+  });
 });
