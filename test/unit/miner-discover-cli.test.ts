@@ -2403,3 +2403,221 @@ describe("#9679: --dry-run makes zero event-ledger writes", () => {
     }
   });
 });
+
+describe("#10000: --dry-run makes zero contribution-profile-cache writes", () => {
+  it("REGRESSION: a dry run opens no cache store at all when the cache file does not exist yet, still extracting fresh profiles for the eligibility filter", async () => {
+    const { mkdtempSync, rmSync, existsSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { resolveContributionProfilesForDiscover } = await import("../../packages/loopover-miner/lib/discover-cli");
+    const { resolveContributionProfileCacheDbPath } = await import(
+      "../../packages/loopover-miner/lib/contribution-profile-cache"
+    );
+
+    const dir = mkdtempSync(join(tmpdir(), "miner-discover-cpc-nofile-"));
+    try {
+      const env = { LOOPOVER_MINER_CONFIG_DIR: dir };
+      const cacheDbPath = resolveContributionProfileCacheDbPath(env);
+      expect(existsSync(cacheDbPath)).toBe(false);
+
+      const initCache = vi.fn();
+      const extract = vi.fn(async (repoFullName: string) => ({ repoFullName, schemaVersion: 1 }));
+      const profiles = await resolveContributionProfilesForDiscover(["acme/widgets"], {
+        githubToken: "tok",
+        env,
+        dryRun: true,
+        initCache: initCache as never,
+        extract: extract as never,
+      });
+
+      expect(initCache).not.toHaveBeenCalled();
+      expect(extract).toHaveBeenCalledWith(
+        "acme/widgets",
+        expect.objectContaining({ githubToken: "tok" }),
+      );
+      expect(profiles.get("acme/widgets")).toEqual({ repoFullName: "acme/widgets", schemaVersion: 1 });
+      expect(existsSync(cacheDbPath)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("REGRESSION: a dry run reads an existing fresh cache row instead of re-extracting, and writes nothing back", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { resolveContributionProfilesForDiscover } = await import("../../packages/loopover-miner/lib/discover-cli");
+    const { initContributionProfileCache, resolveContributionProfileCacheDbPath } = await import(
+      "../../packages/loopover-miner/lib/contribution-profile-cache"
+    );
+
+    const dir = mkdtempSync(join(tmpdir(), "miner-discover-cpc-fresh-"));
+    try {
+      const env = { LOOPOVER_MINER_CONFIG_DIR: dir };
+      const dbPath = resolveContributionProfileCacheDbPath(env);
+      const seedCache = initContributionProfileCache(dbPath);
+      const seeded = seedCache.put({ repoFullName: "acme/widgets", schemaVersion: 1 } as never, NOW);
+      seedCache.close();
+
+      const extract = vi.fn();
+      const profiles = await resolveContributionProfilesForDiscover(["acme/widgets"], {
+        githubToken: "tok",
+        nowMs: NOW,
+        env,
+        dryRun: true,
+        extract: extract as never,
+      });
+      expect(extract).not.toHaveBeenCalled();
+      expect(profiles.get("acme/widgets")).toMatchObject({ repoFullName: "acme/widgets" });
+
+      const verifyCache = initContributionProfileCache(dbPath);
+      const row = verifyCache.get("acme/widgets", NOW);
+      verifyCache.close();
+      expect(row?.fetchedAt).toBe(seeded.fetchedAt);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("REGRESSION: a dry run with a cache miss (file exists, no row for this repo) extracts a fresh profile but never persists it", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { resolveContributionProfilesForDiscover } = await import("../../packages/loopover-miner/lib/discover-cli");
+    const { initContributionProfileCache, resolveContributionProfileCacheDbPath } = await import(
+      "../../packages/loopover-miner/lib/contribution-profile-cache"
+    );
+
+    const dir = mkdtempSync(join(tmpdir(), "miner-discover-cpc-miss-"));
+    try {
+      const env = { LOOPOVER_MINER_CONFIG_DIR: dir };
+      const dbPath = resolveContributionProfileCacheDbPath(env);
+      // The file already exists (so the existsSync guard takes the "read is permitted" branch), but holds no
+      // row for this repo yet.
+      initContributionProfileCache(dbPath).close();
+
+      const extract = vi.fn(async (repoFullName: string) => ({ repoFullName, schemaVersion: 1 }));
+      const profiles = await resolveContributionProfilesForDiscover(["acme/widgets"], {
+        githubToken: "tok",
+        env,
+        dryRun: true,
+        extract: extract as never,
+      });
+      expect(extract).toHaveBeenCalledTimes(1);
+      expect(profiles.get("acme/widgets")).toEqual({ repoFullName: "acme/widgets", schemaVersion: 1 });
+
+      const verify = initContributionProfileCache(dbPath);
+      const row = verify.get("acme/widgets");
+      verify.close();
+      expect(row).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("REGRESSION: omitting ctx.env falls back to process.env for cache-path resolution, exactly like today", async () => {
+    const { existsSync } = await import("node:fs");
+    const { resolveContributionProfilesForDiscover } = await import("../../packages/loopover-miner/lib/discover-cli");
+    const { resolveContributionProfileCacheDbPath } = await import(
+      "../../packages/loopover-miner/lib/contribution-profile-cache"
+    );
+
+    // This file's own beforeEach already redirects LOOPOVER_MINER_CONFIG_DIR to a fresh temp root per test.
+    const ambientPath = resolveContributionProfileCacheDbPath(process.env);
+    expect(existsSync(ambientPath)).toBe(false);
+
+    const initCache = vi.fn();
+    const extract = vi.fn(async (repoFullName: string) => ({ repoFullName, schemaVersion: 1 }));
+    await resolveContributionProfilesForDiscover(["acme/widgets"], {
+      githubToken: "tok",
+      dryRun: true,
+      initCache: initCache as never,
+      extract: extract as never,
+    });
+    expect(initCache).not.toHaveBeenCalled();
+    expect(existsSync(ambientPath)).toBe(false);
+  });
+
+  describe("runDiscover end to end", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("REGRESSION: --dry-run with a github token creates no contribution-profile-cache.sqlite3 file anywhere", async () => {
+      const { mkdtempSync, rmSync, existsSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const { resolveContributionProfileCacheDbPath } = await import(
+        "../../packages/loopover-miner/lib/contribution-profile-cache"
+      );
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 404 })));
+
+      const dir = mkdtempSync(join(tmpdir(), "miner-discover-cpc-dryrun-e2e-"));
+      try {
+        const env = { LOOPOVER_MINER_CONFIG_DIR: dir };
+        const cacheDbPath = resolveContributionProfileCacheDbPath(env);
+
+        const exitCode = await runDiscover(["acme/widgets", "--dry-run", "--json"], {
+          nowMs: NOW,
+          env,
+          githubToken: "t",
+          fetchCandidateIssuesWithSummary: vi.fn(async () => ({
+            issues: [fanOutIssue({ issueNumber: 1 })],
+            warnings: [],
+            rateLimitRemaining: 5000,
+            rateLimitResetAt: "2026-07-09T13:00:00.000Z",
+          })),
+        });
+
+        expect(exitCode).toBe(0);
+        expect(existsSync(cacheDbPath)).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("REGRESSION: a real (non-dry) run with options.env creates the cache under that env's config dir, not the ambient one", async () => {
+      const { mkdtempSync, rmSync, existsSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const { resolveContributionProfileCacheDbPath } = await import(
+        "../../packages/loopover-miner/lib/contribution-profile-cache"
+      );
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 404 })));
+
+      const dir = mkdtempSync(join(tmpdir(), "miner-discover-cpc-realrun-e2e-"));
+      try {
+        const env = { LOOPOVER_MINER_CONFIG_DIR: dir };
+        const scopedCacheDbPath = resolveContributionProfileCacheDbPath(env);
+        // process.env.LOOPOVER_MINER_CONFIG_DIR is redirected to a DIFFERENT temp root by this file's beforeEach
+        // -- the ambient location the pre-fix code (initCache() called with no argument) would have used instead.
+        const ambientCacheDbPath = resolveContributionProfileCacheDbPath(process.env);
+        expect(ambientCacheDbPath).not.toBe(scopedCacheDbPath);
+
+        const exitCode = await runDiscover(["acme/widgets", "--json"], {
+          nowMs: NOW,
+          env,
+          githubToken: "t",
+          fetchCandidateIssuesWithSummary: vi.fn(async () => ({
+            issues: [fanOutIssue({ issueNumber: 1 })],
+            warnings: [],
+            rateLimitRemaining: 5000,
+            rateLimitResetAt: "2026-07-09T13:00:00.000Z",
+          })),
+          initPortfolioQueue: () => tempQueueStore(),
+          initPolicyDocCache: () => tempPolicyDocCacheStore(),
+          initPolicyVerdictCache: () => tempPolicyVerdictCacheStore(),
+          initRankedCandidatesStore: () => tempRankedCandidatesStore(),
+        });
+
+        expect(exitCode).toBe(0);
+        expect(existsSync(scopedCacheDbPath)).toBe(true);
+        expect(existsSync(ambientCacheDbPath)).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+});
