@@ -100,11 +100,24 @@ function parseJson(text: any) {
   }
 }
 
-/** Pick a package.json script by exact name first, then by pattern, considering only string-valued scripts. */
+// Segments that make a pattern candidate unsafe to run as a validation command: `watch`/`dev`/`serve` never
+// terminate (the gate would burn its whole timeout and then fail), `fix`/`write`/`update`/`u` mutate the
+// worktree in place (rewriting files the self-review already scored). A whole-segment set, not a substring
+// blocklist, so `test:fixtures` (segment "fixtures") is untouched.
+const UNSAFE_SCRIPT_SEGMENTS = new Set(["watch", "dev", "serve", "fix", "write", "update", "u"]);
+
+/** Pick a package.json script by exact name first, then by pattern, considering only string-valued scripts. Among
+ * pattern candidates, one whose name has an unsafe `:`-delimited segment is excluded outright rather than run or
+ * substituted for another guess; when several safe candidates remain, the lexicographically smallest name wins so
+ * the pick never depends on `package.json` key order. */
 function pickScript(scripts: any, exactName: any, pattern: any) {
   const names = Object.keys(scripts).filter((name) => typeof scripts[name] === "string");
   if (names.includes(exactName)) return exactName;
-  return names.find((name) => pattern.test(name)) ?? null;
+  const safeCandidates = names
+    .filter((name) => pattern.test(name))
+    .filter((name) => !name.split(":").some((segment) => UNSAFE_SCRIPT_SEGMENTS.has(segment.toLowerCase())))
+    .sort();
+  return safeCandidates.length > 0 ? safeCandidates[0] : null;
 }
 
 function nodeLockfile(exists: any) {

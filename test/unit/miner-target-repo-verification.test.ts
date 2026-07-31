@@ -8,7 +8,7 @@ import {
   VERIFICATION_OUTPUT_TAIL_CHARS,
   type TargetRepoVerificationSpawn,
 } from "../../packages/loopover-miner/lib/target-repo-verification";
-import type { RepoStackResult } from "../../packages/loopover-miner/lib/stack-detection";
+import { detectRepoStack, type RepoStackResult } from "../../packages/loopover-miner/lib/stack-detection";
 
 // #8807: the independent quality gate — the target repo's own commands, never the agent's self-attestation.
 function detectedStack(over: Partial<Record<"testCommand" | "lintCommand" | "buildCommand", string | null>> = {}): RepoStackResult {
@@ -79,6 +79,19 @@ describe("runTargetRepoVerification (#8807)", () => {
       spawn: spawn as never,
     });
     expect(empty).toEqual({ status: "skipped", reason: "no_commands_detected" });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("SKIPS with no_commands_detected — never runs — when a target repo's only candidates are watch/fix variants (#10006)", async () => {
+    const spawn = vi.fn();
+    const stack = detectRepoStack("/repo", {
+      existsSync: (path) => path === "/repo/package.json",
+      readFileSync: () =>
+        JSON.stringify({ scripts: { "test:watch": "vitest", "lint:fix": "eslint --fix .", "build:watch": "tsc -w" } }),
+    });
+    expect(stack).toMatchObject({ detected: true, testCommand: null, lintCommand: null, buildCommand: null });
+    const result = await runTargetRepoVerification({ worktreeDir: "/wt", stack, spawn: spawn as never });
+    expect(result).toEqual({ status: "skipped", reason: "no_commands_detected" });
     expect(spawn).not.toHaveBeenCalled();
   });
 
